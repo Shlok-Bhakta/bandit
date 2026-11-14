@@ -105,6 +105,16 @@ fn files_over_the_limit_are_refused() {
 }
 
 #[test]
+fn files_nested_too_deep_are_refused_before_parsing() {
+    let deep = format!("{{\"format\":\"np-profiles\",\"version\":1,\"name\":\"x\",\"profiles\":[{}1{}]}}", "[".repeat(120), "]".repeat(120));
+    assert!(ProfileSet::parse(&deep).unwrap_err().message.contains("nested"));
+    // Brackets in strings don't count.
+    let quoted = format!("{{\"format\":\"np-profiles\",\"version\":1,\"name\":\"{}\\\"{}\",\"profiles\":[]}}", "[".repeat(40), "{".repeat(40));
+    assert!(!ProfileSet::parse(&quoted).unwrap_err().message.contains("nested"));
+    assert!(nesting(DEFAULT_JSON) <= 5);
+}
+
+#[test]
 fn a_double_tap_with_only_doubles_bound_acts_at_once() {
     let mut taps = Taps::default();
     // The band: singleTap, then singleTap and doubleTap together.

@@ -15,6 +15,9 @@ pub const FORMAT: &str = "np-profiles";
 pub const VERSION: u64 = 1;
 /// The largest file the dongle keeps (it lives in NVS beside the Bluetooth bonds), minified.
 pub const MAX_BYTES: usize = 6144;
+/// The deepest a file may nest (arrays and objects): real ones are 5 deep. Each level is stack
+/// for the parser, and on the dongle 120 levels ran its worker's 24 KB out.
+pub const MAX_DEPTH: usize = 12;
 pub const MAX_PROFILES: usize = 12;
 /// `write` with no time: handwriting stops after this many seconds with nothing written.
 pub const WRITE_SECONDS: u8 = 10;
@@ -508,6 +511,9 @@ impl ProfileSet {
         if text.len() > MAX_BYTES {
             return Err(Error::new("", format!("{} bytes is too big (at most {MAX_BYTES}, minified)", text.len())));
         }
+        if nesting(text) > MAX_DEPTH {
+            return Err(Error::new("", format!("nested more than {MAX_DEPTH} deep")));
+        }
         let raw: RawFile = serde_json::from_str(text).map_err(|e| Error::new("", format!("not np-profiles JSON: {e}")))?;
         raw.check()
     }
@@ -662,6 +668,22 @@ impl RawFile {
         }
         Ok(ProfileSet { name: self.name, profiles, menu, start, buzzes, feedback })
     }
+}
+
+/// How deep arrays and objects nest in `text`, outside strings (malformed JSON is serde's to refuse).
+fn nesting(text: &str) -> usize {
+    let (mut depth, mut deepest, mut in_string, mut escaped) = (0usize, 0, false, false);
+    for byte in text.bytes() {
+        match byte {
+            _ if escaped => escaped = false,
+            b'\\' if in_string => escaped = true,
+            b'"' => in_string = !in_string,
+            b'[' | b'{' if !in_string => { depth += 1; deepest = deepest.max(depth); }
+            b']' | b'}' if !in_string => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    deepest
 }
 
 fn valid_app(app: &str) -> bool {

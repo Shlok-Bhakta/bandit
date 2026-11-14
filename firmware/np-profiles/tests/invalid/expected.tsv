@@ -29,3 +29,4 @@ feedback-pattern.json	feedback.connected
 unknown-band-event.json	profiles[0].gestures.band.pinky.tap
 hold-on-flick.json	profiles[0].gestures.flick.up
 bad-apps.json	profiles[0].gestures.flick.up
+too-deep.json	

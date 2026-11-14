@@ -87,7 +87,8 @@ earlier firmware did.
 The app may add its own fields, like `description`, `symbol` (an SF Symbol) or `color`. The dongle
 ignores them, but they count towards the size limit.
 
-**Size:** at most **6144 bytes** once minified. Five profiles take about 2.5 KB.
+**Size:** at most **6144 bytes** once minified, nested at most 12 deep (a file is 5). Five
+profiles take about 2.5 KB.
 
 ## Gestures
 

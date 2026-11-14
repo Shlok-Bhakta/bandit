@@ -10,6 +10,9 @@ public enum ProfileFormat {
     public static let version: Int64 = 1
     /// The largest file the dongle keeps, minified.
     public static let maxBytes = 6144
+    /// The deepest a file may nest (arrays and objects; a real one is 5): the dongle refuses
+    /// deeper ones before parsing, whose recursion would run out its stack.
+    public static let maxDepth = 12
     public static let maxProfiles = 12
     /// Apps one profile may list.
     public static let maxApps = 16
@@ -42,11 +45,28 @@ public enum ProfileFormat {
 
     /// JSON text → a document, with the dongle's wording for broken files.
     public static func parse(_ data: Data) throws -> JSONValue {
+        if nesting(data) > maxDepth { throw ProfileError("", "nested more than \(maxDepth) deep") }
         do {
             return try JSONValue.parse(data)
         } catch let error as JSONParseError {
             throw ProfileError("", "not np-profiles JSON: \(error)")
         }
+    }
+
+    /// How deep arrays and objects nest, outside strings (as np-profiles counts it).
+    static func nesting(_ data: Data) -> Int {
+        var (depth, deepest, inString, escaped) = (0, 0, false, false)
+        for byte in data {
+            if escaped { escaped = false; continue }
+            switch byte {
+            case UInt8(ascii: "\\") where inString: escaped = true
+            case UInt8(ascii: "\""): inString.toggle()
+            case UInt8(ascii: "["), UInt8(ascii: "{"): if !inString { depth += 1; deepest = max(deepest, depth) }
+            case UInt8(ascii: "]"), UInt8(ascii: "}"): if !inString { depth = max(depth - 1, 0) }
+            default: break
+            }
+        }
+        return deepest
     }
 
     public static func check(_ value: JSONValue) throws -> ParsedProfileSet {
