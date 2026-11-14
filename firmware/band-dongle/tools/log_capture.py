@@ -6,7 +6,8 @@ Opening the port resets the chip, so this opens it once and holds it: a later re
 the dongle's own (a panic, a watchdog, running out of memory). Writes DIR/dongle-<date>.log (every
 line, timestamped; the band's packet lines and NimBLE's "unhandled event: 12" floods are counted,
 not kept) and DIR/crashes.log (boots, panics, asserts, failed allocations, and the dongle's memory
-reports). Reopens the port if it goes away (unplugged, re-enumerated).
+reports). Reopens the port if it goes away (unplugged, re-enumerated). Lines appended to
+DIR/send (`make capture-cmd C='...'`) go to the dongle as serial commands, without reopening the port.
 """
 import os
 import re
@@ -46,6 +47,15 @@ while True:
         pending = b""
         while True:
             pending += port.read(4096)
+            outbox = os.path.join(DIR, "send")
+            if os.path.exists(outbox):
+                with open(outbox) as commands:
+                    text = commands.read()
+                os.remove(outbox)
+                for command in text.splitlines():
+                    if command.strip():
+                        port.write(command.strip().encode() + b"\r\n")
+                        write(f"dongle-{time.strftime('%Y%m%d')}.log", f"{stamp()} [capture] sent: {command.strip()}")
             *lines, pending = pending.split(b"\n")
             for raw in lines:
                 line = ANSI.sub("", raw.decode(errors="replace")).rstrip("\r")

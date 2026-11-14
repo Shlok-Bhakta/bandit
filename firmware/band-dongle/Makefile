@@ -42,7 +42,7 @@ tool = $(PY) -I tools/$(1) $(PORT) $(2)
 TOOLS_READY =
 endif
 
-.PHONY: help setup remote-setup remote-sync build flash release serve serve-status log capture capture-stop crashes status cmd power connect-bench profiles-get profiles-put ota-test ota-tamper-test clean distclean
+.PHONY: help setup remote-setup remote-sync build flash release serve serve-status log capture capture-cmd capture-stop crashes status cmd power connect-bench profiles-get profiles-put ota-test ota-tamper-test clean distclean
 
 help:
 	@echo "make setup                 install the Rust ESP toolchain (espup), espflash and ldproxy"
@@ -54,6 +54,7 @@ help:
 	@echo "make log [SECS=30]         print the dongle's log"
 	@echo "make capture               keep the port open on REMOTE and log everything to ~/np-dongle/logs (crash hunting; stop it before flash/log/cmd)"
 	@echo "make capture-stop          stop it; make crashes [N=40] shows the crash log's tail"
+	@echo "make capture-cmd C='...'   send a control command through the running capture (no reset)"
 	@echo "make status [WAIT=25]      print the dongle's status JSON (after WAIT s: opening the port resets it)"
 	@echo "make cmd C='key playpause' send a control command (CONTROL.md) over serial"
 	@echo "make power PHASES='auto:60 motion:60'   measure the band's battery and radio per state (target/power/)"
@@ -119,6 +120,10 @@ capture:
 	@test -n "$(REMOTE)" || { echo "capture runs on REMOTE (config.mk)"; exit 1; }
 	@$(MAKE) -s remote-sync
 	@ssh $(REMOTE) 'pgrep -f "tools/[l]og_capture.py" >/dev/null && echo "already capturing" || { setsid nohup $(REMOTE_DIR)/run log_capture.py >/dev/null 2>&1 < /dev/null & sleep 1; echo "capturing to ~/$(REMOTE_DIR)/logs"; }'
+
+# A serial command (CONTROL.md) through the running capture, which keeps the port (and the dongle) up.
+capture-cmd:
+	@ssh $(REMOTE) "printf '%s\n' '$(C)' >> ~/$(REMOTE_DIR)/logs/send"
 
 capture-stop:
 	@ssh $(REMOTE) 'pkill -f "tools/[l]og_capture.py" && echo stopped || echo "not capturing"'
