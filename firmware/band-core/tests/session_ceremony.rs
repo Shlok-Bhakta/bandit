@@ -75,7 +75,10 @@ fn the_session_runs_the_whole_ceremony_and_rejoins_the_enrolled_startup() {
     let request = challenge
         .iter()
         .find_map(|event| match event {
-            Event::CeremonyHttp(CeremonyHttpRequest::PairRequest(request)) => Some(request.clone()),
+            Event::CeremonyHttp(http) => match &**http {
+                CeremonyHttpRequest::PairRequest(request) => Some(request.clone()),
+                _ => None,
+            },
             _ => None,
         })
         .expect("pair_request event");
@@ -109,7 +112,10 @@ fn the_session_runs_the_whole_ceremony_and_rejoins_the_enrolled_startup() {
     let pair = events
         .iter()
         .find_map(|event| match event {
-            Event::CeremonyHttp(CeremonyHttpRequest::Pair(pair)) => Some(pair.clone()),
+            Event::CeremonyHttp(http) => match &**http {
+                CeremonyHttpRequest::Pair(pair) => Some(pair.clone()),
+                _ => None,
+            },
             _ => None,
         })
         .expect("pair event");
@@ -134,7 +140,7 @@ fn the_session_runs_the_whole_ceremony_and_rejoins_the_enrolled_startup() {
     let identity = events
         .iter()
         .find_map(|event| match event {
-            Event::CeremonyCompleted(identity) => Some(identity.clone()),
+            Event::CeremonyCompleted(identity) => Some((**identity).clone()),
             _ => None,
         })
         .expect("ceremony completed event");
@@ -188,7 +194,7 @@ fn identity_result_codes_fail_the_ceremony_session() {
 
 fn completed_identity(events: &[Event]) -> Option<band_core::identity::EnrollmentIdentity> {
     events.iter().find_map(|event| match event {
-        Event::CeremonyCompleted(identity) => Some(identity.clone()),
+        Event::CeremonyCompleted(identity) => Some((**identity).clone()),
         _ => None,
     })
 }

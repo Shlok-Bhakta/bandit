@@ -268,54 +268,68 @@ impl AirShieldReceiver {
     pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
         self.pending.extend_from_slice(bytes);
         let mut plaintext = Vec::new();
-        while let Some(&marker) = self.pending.first() {
+        // neural-playground: read with an offset and drop what was read once at the end, not
+        // record by record (each drain moved the rest of a burst).
+        let mut at = 0;
+        let result = loop {
+            let rest = &self.pending[at..];
+            let Some(&marker) = rest.first() else { break Ok(()) };
             let short_control = marker == 0x81 || marker == 0x82;
-            if short_control && self.pending.len() >= 2 && self.pending[1] <= 1 {
-                self.skipped.push(format!(
-                    "control record {marker:02x} {:02x}",
-                    self.pending[1]
-                ));
-                self.pending.drain(..2);
+            if short_control && rest.len() >= 2 && rest[1] <= 1 {
+                let line = format!("control record {marker:02x} {:02x}", rest[1]);
+                self.skip(line);
+                at += 2;
                 continue;
             }
             if marker == 0x01 || marker == 0x02 {
-                if self.pending.len() < 2 {
-                    break;
+                if rest.len() < 2 {
+                    break Ok(());
                 }
-                let size = 3 + usize::from(self.pending[1]);
-                if self.pending.len() < size {
-                    break;
+                let size = 3 + usize::from(rest[1]);
+                if rest.len() < size {
+                    break Ok(());
                 }
-                self.skipped.push(format!(
-                    "relay record on channel {marker}, {} bytes",
-                    size - 3
-                ));
-                self.pending.drain(..size);
+                self.skip(format!("relay record on channel {marker}, {} bytes", size - 3));
+                at += size;
                 continue;
             }
-            if short_control && self.pending.len() < 2 {
-                break;
+            if short_control && rest.len() < 2 {
+                break Ok(());
             }
             if !(0x40..=0x42).contains(&marker) {
-                return Err(perr("Unsupported band transport marker"));
+                break Err(perr("Unsupported band transport marker"));
             }
-            if self.pending.len() < 10 {
-                break;
+            if rest.len() < 10 {
+                break Ok(());
             }
-            let size = 10 + (usize::from(self.pending[9]) + 1) * 16;
-            if self.pending.len() < size {
-                break;
+            let size = 10 + (usize::from(rest[9]) + 1) * 16;
+            if rest.len() < size {
+                break Ok(());
             }
             if marker == 0x40 {
-                let packet = self.pending[..size].to_vec();
-                plaintext.push(self.cipher.decrypt(&packet)?);
+                match self.cipher.decrypt(&self.pending[at..at + size]) {
+                    Ok(record) => plaintext.push(record),
+                    Err(error) => break Err(error),
+                }
             } else {
-                self.skipped
-                    .push(format!("encrypted relay record {marker:02x}, {size} bytes"));
+                self.skip(format!("encrypted relay record {marker:02x}, {size} bytes"));
             }
-            self.pending.drain(..size);
+            at += size;
+        };
+        self.pending.drain(..at);
+        // What's left is less than one record (at most 4105 bytes): a burst's buffer goes.
+        if self.pending.capacity() > 8192 {
+            self.pending.shrink_to(4096);
         }
-        Ok(plaintext)
+        result.map(|()| plaintext)
+    }
+
+    /// neural-playground: `skipped` is drained only when the session's diagnostics are taken,
+    /// so it's capped for a caller that never takes them.
+    fn skip(&mut self, line: String) {
+        if self.skipped.len() < 64 {
+            self.skipped.push(line);
+        }
     }
 
     pub fn finish(&self) -> Result<()> {

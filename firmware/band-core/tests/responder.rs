@@ -90,10 +90,10 @@ fn a_ceremony_runs_to_a_connected_enrolled_session() {
     let band_point = band.band_point();
     let mut session = BandSession::new(None, Some(OwnershipCeremony::default()), false);
     let events = start(&mut session, &mut band).unwrap();
-    let Some(Event::CeremonyHttp(CeremonyHttpRequest::PairRequest(request))) = events
-        .iter()
-        .find(|event| matches!(event, Event::CeremonyHttp(_)))
-    else {
+    let Some(CeremonyHttpRequest::PairRequest(request)) = events.iter().find_map(|event| match event {
+        Event::CeremonyHttp(http) => Some(&**http),
+        _ => None,
+    }) else {
         panic!("no pair_request: {events:?}")
     };
     assert_eq!(request.identity.serial, band_core::responder::SIM_SERIAL);
@@ -104,7 +104,7 @@ fn a_ceremony_runs_to_a_connected_enrolled_session() {
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, Event::CeremonyHttp(CeremonyHttpRequest::Pair(_))))
+            .any(|event| matches!(event, Event::CeremonyHttp(http) if matches!(**http, CeremonyHttpRequest::Pair(_))))
     );
     let bytes = session
         .ceremony_pair_completed(&[0x30, 3, 4], "{\"final\":1}", Some(&band_point))
@@ -237,7 +237,7 @@ fn a_completed_ceremony_sets_the_bands_owner_to_the_new_app_point() {
     let events = start(&mut session, &mut band).unwrap();
     assert!(events.iter().any(|event| matches!(
         event,
-        Event::CeremonyHttp(CeremonyHttpRequest::PairRequest(_))
+        Event::CeremonyHttp(http) if matches!(**http, CeremonyHttpRequest::PairRequest(_))
     )));
     let bytes = session
         .ceremony_pair_request_completed(&[0x30, 1, 2], "{\"pending\":1}")

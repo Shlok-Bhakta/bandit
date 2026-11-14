@@ -196,9 +196,11 @@ pub enum Event {
     CeremonyStage(String),
     /// The session needs an ownership HTTP exchange; resume it with
     /// `BandSession::ceremony_pair_request_completed` / `ceremony_pair_completed`.
-    CeremonyHttp(CeremonyHttpRequest),
+    /// Boxed (neural-playground), as is `CeremonyCompleted`: they're rare and large, and every
+    /// event was their size (176 bytes on the ESP32).
+    CeremonyHttp(Box<CeremonyHttpRequest>),
     /// The band confirmed this host as owner. Persist the identity; trust setup continues.
-    CeremonyCompleted(EnrollmentIdentity),
+    CeremonyCompleted(Box<EnrollmentIdentity>),
 }
 
 impl std::fmt::Debug for Event {

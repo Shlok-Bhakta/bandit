@@ -54,21 +54,33 @@ fn without_padding(record: &[u8]) -> &[u8] {
     }
 }
 
+/// neural-playground: the largest frame accepted. The band's are a few hundred bytes; a
+/// header claiming more (up to 32 KB) means the reading lost its place, and waiting for it
+/// held every later record (on the dongle, until the heap ran out).
+pub const MAX_FRAME: usize = 8192;
+/// neural-playground: how much of each recent record is kept for the log.
+const RECENT_BYTES: usize = 256;
+
 /// Reassembles frames that span several decrypted 16-byte-aligned records.
 #[derive(Default)]
 pub struct DataXReceiver {
     pending: Vec<u8>,
+    /// Where the next frame starts in `pending` (consumed bytes go in one move, not per frame).
+    start: usize,
+    /// The record just pushed may still end in padding (stripped once its frames are read).
+    unstripped: bool,
     /// The sender pads every record (a whole block of 0xd0 when its frames end on a block
     /// boundary): each record's padding is then known exactly and comes off before parsing.
     always_padded: bool,
-    /// The last few records as received (newest first), for the log when reading goes wrong.
+    /// The last few records as received (newest first, at most `RECENT_BYTES` of each), for
+    /// the log when reading goes wrong.
     recent: std::collections::VecDeque<Vec<u8>>,
 }
 
 impl std::fmt::Debug for DataXReceiver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DataXReceiver")
-            .field("pending_len", &self.pending.len())
+            .field("pending_len", &self.pending_len())
             .finish()
     }
 }
@@ -80,14 +92,15 @@ impl DataXReceiver {
         self.always_padded = true;
     }
 
-    /// The last few records as received, newest first. Debug only: they hold sensor data.
+    /// The last few records as received (their first bytes), newest first. Debug only: they
+    /// hold sensor data.
     pub fn recent(&self) -> &std::collections::VecDeque<Vec<u8>> {
         &self.recent
     }
 
     /// Bytes held back waiting for the rest of a frame.
     pub fn pending_len(&self) -> usize {
-        self.pending.len()
+        self.pending.len() - self.start
     }
 
     /// Feeds one decrypted AirShield record and returns every frame it completes.
@@ -110,6 +123,17 @@ impl DataXReceiver {
     /// An error leaves the offending bytes pending; treat it as fatal for the
     /// connection and drop the receiver.
     pub fn feed(&mut self, plaintext: &[u8]) -> Result<Vec<DataXFrame>> {
+        self.push(plaintext)?;
+        let mut frames = Vec::new();
+        while let Some(frame) = self.next_frame()? {
+            frames.push(frame);
+        }
+        Ok(frames)
+    }
+
+    /// neural-playground: `feed` in two steps, so a record's frames can be handled one at a
+    /// time instead of all held at once: push the record, then take `next_frame` until `None`.
+    pub fn push(&mut self, plaintext: &[u8]) -> Result<()> {
         if plaintext.is_empty() || !plaintext.len().is_multiple_of(16) {
             return Err(perr("Unaligned DataX plaintext"));
         }
@@ -119,44 +143,67 @@ impl DataXReceiver {
         if !self.always_padded && plaintext.ends_with(&[0xd0; 16]) {
             self.always_padded = true;
         }
-        self.recent.push_front(plaintext.to_vec());
-        self.recent.truncate(4);
+        let mut copy = if self.recent.len() >= 4 { self.recent.pop_back().unwrap_or_default() } else { Vec::new() };
+        copy.clear();
+        copy.extend_from_slice(&plaintext[..plaintext.len().min(RECENT_BYTES)]);
+        self.recent.push_front(copy);
         let record = if self.always_padded { without_padding(plaintext) } else { plaintext };
+        self.compact();
         self.pending.extend_from_slice(record);
-        let mut frames = Vec::new();
-        while self.pending.len() >= 4 {
-            let length = be16(&self.pending, 0);
+        self.unstripped = !self.always_padded;
+        Ok(())
+    }
+
+    /// The next complete frame of what was pushed, or `None` when the rest is a partial frame.
+    pub fn next_frame(&mut self) -> Result<Option<DataXFrame>> {
+        let available = &self.pending[self.start..];
+        if available.len() >= 4 {
+            let length = be16(available, 0);
             let size = usize::from(length & 0x7fff) + 4;
-            if self.pending.len() < size {
-                break;
-            }
-            let channel = be16(&self.pending, 2);
-            let mut offset = 4;
-            let mut words = Vec::new();
-            if length & 0x8000 != 0 {
-                loop {
-                    if offset + 4 > size {
-                        return Err(perr("Truncated DataX typed header"));
-                    }
-                    let word = be32(&self.pending, offset);
-                    words.push(word);
-                    offset += 4;
-                    if word & 0x8000_0000 == 0 {
-                        break;
+            if available.len() >= size {
+                let channel = be16(available, 2);
+                let mut offset = 4;
+                let mut words = Vec::new();
+                if length & 0x8000 != 0 {
+                    loop {
+                        if offset + 4 > size {
+                            return Err(perr("Truncated DataX typed header"));
+                        }
+                        let word = be32(available, offset);
+                        words.push(word);
+                        offset += 4;
+                        if word & 0x8000_0000 == 0 {
+                            break;
+                        }
                     }
                 }
+                let frame = DataXFrame { channel, words, payload: available[offset..size].to_vec() };
+                self.start += size;
+                return Ok(Some(frame));
             }
-            frames.push(DataXFrame {
-                channel,
-                words,
-                payload: self.pending[offset..size].to_vec(),
-            });
-            self.pending.drain(..size);
         }
-        if !self.always_padded {
+        self.compact();
+        if self.unstripped {
+            self.unstripped = false;
             self.strip_padding();
         }
-        Ok(frames)
+        // Checked on what's left once padding is off (padding read as a header claims ~20 KB;
+        // padding the tail rule couldn't take, in the residual ambiguity, isn't a frame either).
+        if self.pending.len() >= 4 && !self.pending.iter().all(|&byte| byte == self.pending[0] && (0xc1..=0xd0).contains(&byte)) {
+            let size = usize::from(be16(&self.pending, 0) & 0x7fff) + 4;
+            if size > MAX_FRAME {
+                return Err(perr(format!("DataX frame too large ({size} bytes)")));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Drops the frames already read from the front of `pending`.
+    fn compact(&mut self) {
+        if self.start > 0 {
+            self.pending.drain(..self.start);
+            self.start = 0;
+        }
     }
 
     /// Only the repeated suffix observed on the tested firmware is stripped,

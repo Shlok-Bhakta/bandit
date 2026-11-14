@@ -29,6 +29,10 @@ use crate::ota::{OtaItemProgress, OtaJob, OtaPlan, OtaStatus};
 use crate::proto::{ProtoFields, field_bytes, field_int};
 
 const STREAM_FIELDS: [u32; 3] = [3, 6, 8];
+/// neural-playground: the longest setup message accepted before encryption.
+const MAX_SETUP_MESSAGE: usize = 2048;
+/// neural-playground: diagnostics lines kept until `take_diagnostics`.
+const MAX_DIAGNOSTICS: usize = 128;
 /// The request id of [`BandSession::request_active`], apart from the counted ones.
 const ACTIVE_REQUEST: u64 = 1 << 20;
 /// The request id of [`BandSession::set_band_handwriting`]'s state change.
@@ -206,6 +210,8 @@ pub struct BandSession {
     guessing: bool,
     /// Traffic the session skipped, described for the log.
     diagnostics: Vec<String>,
+    /// Lines `note` left out since the last `take_diagnostics`.
+    diagnostics_dropped: usize,
     /// What the band said about itself while connecting.
     device_info: Option<DeviceInfo>,
     /// Describe every frame once streaming, too (debug logging).
@@ -326,6 +332,7 @@ impl BandSession {
             variant: SCHEME_3,
             guessing: false,
             diagnostics: Vec::new(),
+            diagnostics_dropped: 0,
             device_info: None,
             log_frames: false,
             probe: Vec::new(),
@@ -475,7 +482,7 @@ impl BandSession {
         *count += 1;
         let count = *count;
         if count <= PROBE_SHOWN || count.is_multiple_of(PROBE_EVERY) {
-            self.diagnostics.push(format!("probe #{count} {}", line()));
+            self.note(format!("probe #{count} {}", line()));
         }
     }
 
@@ -488,7 +495,21 @@ impl BandSession {
         if let Some(receiver) = self.receiver.as_mut() {
             self.diagnostics.append(&mut receiver.skipped);
         }
+        if self.diagnostics_dropped > 0 {
+            self.diagnostics.push(format!("({} more lines dropped)", self.diagnostics_dropped));
+            self.diagnostics_dropped = 0;
+        }
         std::mem::take(&mut self.diagnostics)
+    }
+
+    /// neural-playground: a diagnostics line, unless `MAX_DIAGNOSTICS` wait to be taken (a
+    /// caller that takes them rarely, or a burst of skipped frames, mustn't grow them unbounded).
+    fn note(&mut self, line: String) {
+        if self.diagnostics.len() < MAX_DIAGNOSTICS {
+            self.diagnostics.push(line);
+        } else {
+            self.diagnostics_dropped += 1;
+        }
     }
 
     pub fn authenticated_packets(&self) -> usize {
@@ -601,10 +622,21 @@ impl BandSession {
     /// running, first persist `enrollment()` (set once the band confirmed
     /// ownership) — the band may already have changed owner.
     pub fn feed(&mut self, bytes: &[u8], time: f64) -> Result<FeedResult> {
-        self.last_clock = time;
-        self.pending.extend_from_slice(bytes);
-        let mut outgoing = Vec::new();
         let mut events = Vec::new();
+        let outgoing = self.feed_into(bytes, time, &mut |event| events.push(event))?;
+        Ok(FeedResult { outgoing, events })
+    }
+
+    /// neural-playground: [`Self::feed`] that hands each event to `sink` as it's decoded and
+    /// returns the bytes to write. One record can carry a few KB of motion (hundreds of
+    /// events), which as one `Vec<Event>` was a block the dongle's heap didn't have.
+    pub fn feed_into(&mut self, bytes: &[u8], time: f64, sink: &mut dyn FnMut(Event)) -> Result<Vec<u8>> {
+        self.last_clock = time;
+        let mut outgoing = Vec::new();
+        let encrypted = self.receiver.is_some();
+        if !encrypted {
+            self.pending.extend_from_slice(bytes);
+        }
         while self.receiver.is_none() && self.pending.len() >= 4 {
             if self.pending[0] & 0x80 == 0 {
                 return Err(perr("Unexpected bytes before band encryption"));
@@ -612,6 +644,10 @@ impl BandSession {
             let size = usize::from(be16(&self.pending, 0) & 0x7fff) + 4;
             if size < 8 {
                 return Err(perr("Invalid band setup length"));
+            }
+            // neural-playground: setup messages are a few hundred bytes; don't wait for 32 KB.
+            if size > MAX_SETUP_MESSAGE {
+                return Err(perr(format!("Band setup message too long ({size} bytes)")));
             }
             if self.pending.len() < size {
                 break;
@@ -731,11 +767,15 @@ impl BandSession {
             }
         }
         if self.receiver.is_some() {
+            // Once encrypted, bytes go straight to the receiver; what the handshake left over
+            // goes first, and `pending` isn't used again.
+            let leftover = if encrypted { Vec::new() } else { std::mem::take(&mut self.pending) };
+            let input = if encrypted { bytes } else { leftover.as_slice() };
             let records = self
                 .receiver
                 .as_mut()
                 .expect("checked")
-                .feed(&self.pending)
+                .feed(input)
                 .map_err(|error| {
                     if self.authenticated_packets == 0 && self.guessing {
                         perr(format!(
@@ -746,25 +786,25 @@ impl BandSession {
                         error
                     }
                 })?;
-            self.pending.clear();
-            // neural-playground: a burst (the caller fell behind) mustn't keep its buffer: on the
-            // dongle that's heap the next burst can't get.
-            if self.pending.capacity() > 4096 {
-                self.pending.shrink_to(512);
-            }
+            drop(leftover);
             if self.receiver.as_ref().is_some_and(|receiver| receiver.cipher.pads_aligned()) {
                 self.datax.set_always_padded();
             }
             for plaintext in records {
                 self.authenticated_packets += 1;
-                let frames = self.datax.feed(&plaintext)?;
+                self.datax.push(&plaintext)?;
                 if matches!(
                     self.setup_stage,
                     SetupStage::Ceremony | SetupStage::Identity | SetupStage::Link
                 ) {
-                    // Setup only: header bytes (length, channel, type words), no payload.
+                    // Setup only (a few small records): read whole, to log their header bytes
+                    // (length, channel, type words), no payload.
+                    let mut frames = Vec::new();
+                    while let Some(frame) = self.datax.next_frame()? {
+                        frames.push(frame);
+                    }
                     let head = &plaintext[..plaintext.len().min(12)];
-                    self.diagnostics.push(format!(
+                    let line = format!(
                         "packet {}: {} plaintext bytes, starts {:02x?}; frames {:?}; {} bytes held for a later packet",
                         self.authenticated_packets,
                         plaintext.len(),
@@ -779,11 +819,17 @@ impl BandSession {
                             ))
                             .collect::<Vec<_>>(),
                         self.datax.pending_len()
-                    ));
+                    );
+                    self.note(line);
+                    for frame in frames {
+                        for event in self.input(&frame, time, &mut outgoing)? {
+                            sink(event);
+                        }
+                    }
                 }
-                for frame in frames {
+                while let Some(frame) = self.datax.next_frame()? {
                     if self.log_frames && self.setup_stage == SetupStage::Input {
-                        self.diagnostics.push(format!(
+                        self.note(format!(
                             "frame ch {:#x} words {:08x?} {}B",
                             frame.channel,
                             frame.words,
@@ -797,30 +843,35 @@ impl BandSession {
                             if self.setup_stage == SetupStage::Input && message.contains("protobuf") =>
                         {
                             let head: String = frame.payload.iter().take(24).map(|b| format!("{b:02x}")).collect();
-                            self.diagnostics.push(format!(
+                            self.note(format!(
                                 "skipped a frame ({message}): ch {:#x} words {:08x?} {}B {head}",
                                 frame.channel,
                                 frame.words,
                                 frame.payload.len()
                             ));
                             // The records just before, to see how the reading lost its place.
-                            for (age, record) in self.datax.recent().iter().enumerate() {
+                            let records: Vec<String> = self.datax.recent().iter().enumerate().map(|(age, record)| {
                                 let hex: String = record.iter().map(|b| format!("{b:02x}")).collect();
-                                self.diagnostics.push(format!("skipped: record -{age} ({}B) {hex}", record.len()));
+                                format!("skipped: record -{age} ({}B) {hex}", record.len())
+                            }).collect();
+                            for line in records {
+                                self.note(line);
                             }
                             Vec::new()
                         }
                         other => other?,
                     };
-                    events.extend(produced);
+                    for event in produced {
+                        sink(event);
+                    }
                 }
                 if self.streaming && !self.stopping && time - self.last_heartbeat >= 0.2 {
                     self.last_heartbeat = time;
-                    events.push(Event::Heartbeat);
+                    sink(Event::Heartbeat);
                 }
             }
         }
-        Ok(FeedResult { outgoing, events })
+        Ok(outgoing)
     }
 
     /// Call periodically (e.g. every 50 ms): expires requests and releases the dial.
@@ -860,7 +911,7 @@ impl BandSession {
         }
         if !self.stopping && self.ota_request.is_some_and(|(_, deadline)| time >= deadline) {
             self.ota_request = None;
-            self.diagnostics.push("ota: the band didn't answer the update status request".into());
+            self.note("ota: the band didn't answer the update status request".into());
         }
         if !self.stopping && self.haptics_request.is_some_and(|(_, deadline, _)| time >= deadline) {
             let (id, _, _) = self.haptics_request.take().expect("checked pending haptics");
@@ -1036,7 +1087,7 @@ impl BandSession {
         )?;
         let bytes = self.encrypt(&frame)?;
         self.configuration_id = id;
-        self.diagnostics.push(format!("probe: writing config {}", ProtoFields::parse(body)?.describe_nested(0)));
+        self.note(format!("probe: writing config {}", ProtoFields::parse(body)?.describe_nested(0)));
         self.hand_request = Some(HandRequest {
             id,
             hand: None,
@@ -1066,7 +1117,7 @@ impl BandSession {
         let bytes = self.encrypt(&frame)?;
         self.configuration_id = id;
         self.ota_request = Some((id, self.last_clock + 5.0));
-        self.diagnostics.push(format!("ota: asking the band's update status (request {id})"));
+        self.note(format!("ota: asking the band's update status (request {id})"));
         Ok(bytes)
     }
 
@@ -1094,7 +1145,9 @@ impl BandSession {
         if let Some(last) = lines.last() {
             self.ota_progress = Some(last.trim_start_matches("ota: ").to_owned());
         }
-        self.diagnostics.extend(lines);
+        for line in lines {
+            self.note(line);
+        }
     }
 
     /// Debug: run a firmware update (see [`crate::ota`]): a trial that ends with Abort, or an
@@ -1115,7 +1168,7 @@ impl BandSession {
                 return Err(BandError::Busy("The band is installing: it isn't safe to cancel now.".into()));
             }
             self.ota_job = None;
-            self.diagnostics.push("ota: stopping the update".into());
+            self.note("ota: stopping the update".into());
         }
         let mut job = OtaJob::new(plan);
         let mut ids = self.configuration_id;
@@ -1232,13 +1285,13 @@ impl BandSession {
         }
         self.hand_request = None;
         if request.probe {
-            self.diagnostics.push(format!("probe: config write answer: {}", fields.describe_nested(0)));
+            self.note(format!("probe: config write answer: {}", fields.describe_nested(0)));
             outgoing.extend(self.request_hand(None, true, time)?);
             return Ok(Vec::new());
         }
         if self.probing() && request.reading {
             // Every setting the band reports, to find ones beyond the hand (a model choice?).
-            self.diagnostics.push(format!("probe: band config: {}", fields.describe_nested(0)));
+            self.note(format!("probe: band config: {}", fields.describe_nested(0)));
         }
         let failure = |message: &str| vec![Event::HandednessFailure(message.to_owned())];
         if time >= request.deadline {
@@ -1446,14 +1499,14 @@ impl BandSession {
                 let request = ceremony.skip_challenge(&frame.payload)?;
                 Ok(vec![
                     Event::CeremonyStage("claiming the band".into()),
-                    Event::CeremonyHttp(CeremonyHttpRequest::PairRequest(request)),
+                    Event::CeremonyHttp(Box::new(CeremonyHttpRequest::PairRequest(request))),
                 ])
             }
             0x02002003 => {
                 let pair = ceremony.start_change_owner(&frame.payload)?;
                 Ok(vec![
                     Event::CeremonyStage("confirming ownership".into()),
-                    Event::CeremonyHttp(CeremonyHttpRequest::Pair(pair)),
+                    Event::CeremonyHttp(Box::new(CeremonyHttpRequest::Pair(pair))),
                 ])
             }
             0x02002005 => {
@@ -1468,12 +1521,12 @@ impl BandSession {
                 let proof = self.enable_trust(true)?;
                 outgoing.extend(self.encrypt(&proof)?);
                 Ok(vec![
-                    Event::CeremonyCompleted(identity),
+                    Event::CeremonyCompleted(Box::new(identity)),
                     Event::CeremonyStage("establishing trust".into()),
                 ])
             }
             _ => {
-                self.diagnostics.push(format!(
+                self.note(format!(
                     "unhandled ceremony frame: channel {:#x}, words {:08x?}, {} payload bytes",
                     frame.channel,
                     frame.words,
@@ -1603,7 +1656,8 @@ impl BandSession {
         outgoing: &mut Vec<u8>,
     ) -> Result<Vec<Event>> {
         if let Some(&kind) = frame.words.last() {
-            if self.channel_types.len() >= 1024 && !self.channel_types.contains_key(&frame.channel)
+            // neural-playground: the band uses about ten; each costs heap on a dongle.
+            if self.channel_types.len() >= 64 && !self.channel_types.contains_key(&frame.channel)
             {
                 return Err(perr("Too many band input channels"));
             }
@@ -1691,7 +1745,7 @@ impl BandSession {
                 ));
             }
             if route(frame.channel) == 6 && self.ota_request.take().is_some() {
-                self.diagnostics.push("ota: the band rejected the update status request".into());
+                self.note("ota: the band rejected the update status request".into());
                 return Ok(Vec::new());
             }
             if route(frame.channel) == 6 && self.hand_request.is_some() {
@@ -1718,8 +1772,9 @@ impl BandSession {
                         if let Some((index, margin)) = handwriting.decoder.push(chunk) {
                             let shown = if index == PAUSE { "pause" } else { symbol(index) };
                             handwriting.tokens.push((index, shown, margin));
-                            if handwriting.tokens.len() > 500 {
-                                handwriting.tokens.drain(..100);
+                            // neural-playground: 128, not 500 (8 KB of a dongle's heap, for debug).
+                            if handwriting.tokens.len() > 128 {
+                                handwriting.tokens.drain(..32);
                             }
                         }
                     }
@@ -1737,7 +1792,7 @@ impl BandSession {
                         .and_then(|fields| ProtoFields::parse(fields.bytes(3).ok()?).ok())
                         .and_then(|line| String::from_utf8(line.bytes(1).ok()?.to_vec()).ok())
                 {
-                    self.diagnostics.push(format!("band log: {}", text.trim_end()));
+                    self.note(format!("band log: {}", text.trim_end()));
                     return Ok(Vec::new());
                 }
                 let shown = ProtoFields::parse(&frame.payload)
@@ -1757,7 +1812,7 @@ impl BandSession {
             self.device_info = DeviceInfo::find(&fields, 0).or(self.device_info.take());
             if self.probing() {
                 // DeviceInfoResp: firmware, model ids, protocol version, features (handwriting).
-                self.diagnostics.push(format!("probe: device info: {}", fields.describe_nested(0)));
+                self.note(format!("probe: device info: {}", fields.describe_nested(0)));
             }
             if fields.required_integer(1)? != 1 {
                 return Ok(Vec::new());
@@ -1826,8 +1881,8 @@ impl BandSession {
                 self.ota_request = None;
                 self.ota_last = OtaStatus::from_response(&fields);
                 match self.ota_last {
-                    Some(status) => self.diagnostics.push(format!("ota: update status: {status}")),
-                    None => self.diagnostics.push(format!("ota: update status: {}", fields.describe_nested(0))),
+                    Some(status) => self.note(format!("ota: update status: {status}")),
+                    None => self.note(format!("ota: update status: {}", fields.describe_nested(0))),
                 }
                 return Ok(Vec::new());
             }
@@ -1853,7 +1908,7 @@ impl BandSession {
                 if fields.integer(2)? != 1 {
                     if self.probing() {
                         // The extra flags may be what it rejects: subscribe again without them.
-                        self.diagnostics.push(format!(
+                        self.note(format!(
                             "probe: the band rejected the subscription with flags {:?} ({}); retrying without",
                             self.probe,
                             fields.describe()
@@ -1868,7 +1923,7 @@ impl BandSession {
                 if self.probing() {
                     let shown = flags.describe();
                     if self.probe_flags.as_deref() != Some(shown.as_str()) {
-                        self.diagnostics.push(format!("probe: stream flags (request {request}): {shown}"));
+                        self.note(format!("probe: stream flags (request {request}): {shown}"));
                         self.probe_flags = Some(shown);
                     }
                 }
@@ -1928,13 +1983,13 @@ impl BandSession {
                 received_at: time,
             };
             if self.describe_gestures {
-                self.diagnostics.push(format!("LAB fields {} {} {}: {}", gesture.finger, gesture.action, gesture.derived_action, fields.describe()));
+                self.note(format!("LAB fields {} {} {}: {}", gesture.finger, gesture.action, gesture.derived_action, fields.describe()));
             }
             if self.probing() {
                 let shown = fields.describe();
                 let name = format!("{} {} {}", gesture.finger, gesture.action, gesture.derived_action);
                 // Every one: they're few, and the ones during handwriting are the point.
-                self.diagnostics.push(format!("probe gesture {name}: {shown}"));
+                self.note(format!("probe gesture {name}: {shown}"));
             }
             self.dial.gesture(&gesture, time);
             events.push(Event::Gesture(gesture));

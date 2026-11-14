@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `BandSession::feed_into` streams events to a callback (`feed` collects them as before), and
+  every buffer on the receive path is bounded (see VENDORED.md): a misbehaving stream ends the
+  session with an error instead of growing without limit. `Event::CeremonyHttp` and
+  `Event::CeremonyCompleted` are boxed.
 - An update status the band never answers (`ota_status`) is given up after 5 s, as the other
   requests are, so haptics no longer stop until a reconnect.
 
