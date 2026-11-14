@@ -1,0 +1,8 @@
+menu "BCI bridge"
+    config BCI_BUTTON_GPIO
+        int "Test button GPIO (sends Select)"
+        default 9 if IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32C6 || IDF_TARGET_ESP32H2
+        default 0
+        help
+            The board's BOOT button: GPIO0 on ESP32 and ESP32-S3, GPIO9 on ESP32-C3/C6/H2.
+endmenu

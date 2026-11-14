@@ -1,0 +1,24 @@
+[package]
+name = "band-core"
+version = "0.5.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.88"
+description = "Sans-IO Meta Neural Band protocol core"
+repository = "https://gitlab.com/896kb/band-core"
+
+[dependencies]
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+hkdf = "0.12"
+hmac = "0.12"
+p256 = { version = "0.13", features = ["ecdh", "ecdsa"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+sha2 = "0.10"
+thiserror = "2"
+
+[dev-dependencies]
+hex = "0.4"
+p256 = { version = "0.13", features = ["ecdh", "ecdsa"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+sha2 = "0.10"

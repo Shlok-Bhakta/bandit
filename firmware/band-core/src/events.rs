@@ -1,0 +1,266 @@
+//! Typed values the session reports: gestures, sEMG readings and battery.
+
+use crate::ceremony::CeremonyHttpRequest;
+use crate::error::{Result, perr};
+use crate::identity::EnrollmentIdentity;
+use crate::proto::ProtoFields;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Hand {
+    Right,
+    Left,
+}
+
+/// One recognized-gesture message as the band sent it. Names come from the
+/// band's enum tables; unknown values read `unrecognized:<n>`.
+/// Sensor data must not be logged verbatim.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GestureMessage {
+    pub sequence: u64,
+    pub timestamp_us: u64,
+    pub finger: String,
+    pub action: String,
+    pub derived_action: String,
+    pub synthetic: bool,
+    /// Host monotonic time (seconds) the message was decoded at.
+    pub received_at: f64,
+}
+
+/// `BatteryInfoResp.batteryData`: level 0–100 and an optional charging flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BatteryStatus {
+    pub level: u8,
+    pub charging: Option<bool>,
+}
+
+impl BatteryStatus {
+    pub fn from_response(response: &[u8]) -> Result<Self> {
+        let rpc = ProtoFields::parse(response)?;
+        if rpc.required_integer(2)? != 1 {
+            return Err(perr("Battery status unavailable"));
+        }
+        let inner = ProtoFields::parse(rpc.bytes(3)?)?;
+        let battery = ProtoFields::parse(inner.bytes(1)?)?;
+        let level = battery.required_integer(1)?;
+        if level > 100 {
+            return Err(perr("Invalid battery level"));
+        }
+        let charging = if battery.contains(2) {
+            let value = battery.required_integer(2)?;
+            if value > 1 {
+                return Err(perr("Invalid charging flag"));
+            }
+            Some(value == 1)
+        } else {
+            None
+        };
+        Ok(Self {
+            level: level as u8,
+            charging,
+        })
+    }
+}
+
+/// neural-playground: the rest of `batteryData`, as firmware 1054928927 sends it (names inferred:
+/// field 3 a float in °C, 4 millivolts, 5 a signed current in mA, negative while charging, 6 a
+/// counter). For measuring what the band's states cost.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct BatteryDetail {
+    pub temperature_c: Option<f32>,
+    pub millivolts: Option<u32>,
+    pub milliamps: Option<i32>,
+    pub counter: Option<u64>,
+}
+
+impl BatteryDetail {
+    pub fn from_response(response: &[u8]) -> Result<Self> {
+        let rpc = ProtoFields::parse(response)?;
+        let inner = ProtoFields::parse(rpc.bytes(3)?)?;
+        let battery = ProtoFields::parse(inner.bytes(1)?)?;
+        let int = |field| battery.contains(field).then(|| battery.integer(field).ok()).flatten();
+        Ok(Self {
+            temperature_c: battery.fixed32(3).map(f32::from_le_bytes),
+            millivolts: int(4).and_then(|v| u32::try_from(v).ok()),
+            // A negative int32 travels as a 64-bit two's complement varint.
+            milliamps: int(5).and_then(|v| i32::try_from(v as i64).ok()),
+            counter: int(6),
+        })
+    }
+}
+
+/// Dimensions from the band's `Config.emg` field. ADC calibration is unknown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmgConfig {
+    pub sample_rate: u64,
+    pub channels: u64,
+    pub adc_bits: u64,
+    pub samples_per_batch: u64,
+    pub encoding: u64,
+}
+
+impl EmgConfig {
+    pub fn from_response(response: &[u8]) -> Result<Self> {
+        let response = ProtoFields::parse(response)?;
+        if response.required_integer(2)? != 1 {
+            return Err(perr("The band rejected the EMG configuration read."));
+        }
+        let config = ProtoFields::parse(response.bytes(6)?)?;
+        let emg = ProtoFields::parse(config.bytes(42)?)?;
+        Ok(Self {
+            sample_rate: emg.required_integer(1)?,
+            channels: emg.required_integer(2)?,
+            adc_bits: emg.required_integer(4)?,
+            samples_per_batch: emg.required_integer(5)?,
+            encoding: emg.required_integer(10)?,
+        })
+    }
+
+    /// The observed layout: 2048 Hz, 8 channels, 16-bit, 16 samples, encoding 0.
+    pub fn is_supported(&self) -> bool {
+        self.sample_rate == 2048
+            && self.channels == 8
+            && self.adc_bits == 16
+            && self.samples_per_batch == 16
+            && self.encoding == 0
+    }
+}
+
+/// One raw sEMG batch: 16 samples × 8 channels, little-endian u16, interleaved
+/// by sample then channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmgBatch {
+    pub sequence: u64,
+    pub timestamp_us: u64,
+    pub values: Vec<u16>,
+}
+
+impl EmgBatch {
+    pub const CHANNELS: usize = 8;
+    pub const SAMPLES: usize = 16;
+
+    pub fn parse(payload: &[u8], config: &EmgConfig) -> Result<Self> {
+        if !config.is_supported() {
+            return Err(perr(
+                "This EMG format isn't supported by the readings view yet.",
+            ));
+        }
+        let fields = ProtoFields::parse(payload)?;
+        let sequence = fields.required_integer(1)?;
+        let timestamp_us = fields.required_integer(2)?;
+        let bytes = fields.bytes_len(3, 256)?;
+        let values = bytes.as_chunks::<2>().0.iter().map(|&pair| u16::from_le_bytes(pair)).collect();
+        Ok(Self {
+            sequence,
+            timestamp_us,
+            values,
+        })
+    }
+}
+
+/// Everything a session reports. Times are implied by the `feed`/`tick` call.
+/// Sensor data must not be logged verbatim: `Debug` prints raw sEMG frames by length only.
+#[derive(Clone)]
+pub enum Event {
+    /// Input streams are live (first subscription ack or first sensor data).
+    Connected,
+    /// Authenticated traffic arrived while streaming (at most every 0.2 s).
+    Heartbeat,
+    /// A decoded sensor frame arrived (gesture, motion or raw sEMG).
+    DataSeen,
+    Gesture(GestureMessage),
+    /// The pinch dial armed (`true`) or let go (`false`). Still emitted for compatibility;
+    /// `Controls` reads `Motion` / `Orientation` instead.
+    DialState(bool),
+    /// Relative wrist rotation while the dial is armed, coalesced to ≥ 20 ms. Still emitted for
+    /// compatibility; `Controls` reads `Motion` / `Orientation` instead.
+    DialTurn(f64),
+    /// One gyro sample: the band's clock (µs) and the raw axes (× 0.07 = °/s).
+    Motion { timestamp_us: u64, gyro: [f64; 3] },
+    /// One orientation sample: a unit quaternion (w, x, y, z) that turns the band's frame
+    /// into the room's.
+    Orientation([f32; 4]),
+    Handedness(Hand),
+    HandednessFailure(String),
+    /// Result for a matching haptics RPC; detailed status may be absent.
+    HapticsFinished {
+        sequence: u32,
+        rpc_success: bool,
+        haptics_success: Option<bool>,
+    },
+    /// `None` = unknown (timed out, rejected or unsupported).
+    BatteryStatus(Option<BatteryStatus>),
+    RawEmgFrame(Vec<u8>),
+    RawEmgConfiguration(EmgConfig),
+    RawEmgState(bool),
+    RawEmgFailure(String),
+    CeremonyStage(String),
+    /// The session needs an ownership HTTP exchange; resume it with
+    /// `BandSession::ceremony_pair_request_completed` / `ceremony_pair_completed`.
+    CeremonyHttp(CeremonyHttpRequest),
+    /// The band confirmed this host as owner. Persist the identity; trust setup continues.
+    CeremonyCompleted(EnrollmentIdentity),
+}
+
+impl std::fmt::Debug for Event {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Connected => f.write_str("Connected"),
+            Self::Heartbeat => f.write_str("Heartbeat"),
+            Self::DataSeen => f.write_str("DataSeen"),
+            Self::Gesture(gesture) => f.debug_tuple("Gesture").field(gesture).finish(),
+            Self::DialState(on) => f.debug_tuple("DialState").field(on).finish(),
+            Self::DialTurn(delta) => f.debug_tuple("DialTurn").field(delta).finish(),
+            Self::Motion { timestamp_us, gyro } => f
+                .debug_struct("Motion")
+                .field("timestamp_us", timestamp_us)
+                .field("gyro", gyro)
+                .finish(),
+            Self::Orientation(q) => f.debug_tuple("Orientation").field(q).finish(),
+            Self::Handedness(hand) => f.debug_tuple("Handedness").field(hand).finish(),
+            Self::HandednessFailure(message) => {
+                f.debug_tuple("HandednessFailure").field(message).finish()
+            }
+            Self::HapticsFinished {
+                sequence,
+                rpc_success,
+                haptics_success,
+            } => f
+                .debug_struct("HapticsFinished")
+                .field("sequence", sequence)
+                .field("rpc_success", rpc_success)
+                .field("haptics_success", haptics_success)
+                .finish(),
+            Self::BatteryStatus(status) => f.debug_tuple("BatteryStatus").field(status).finish(),
+            Self::RawEmgFrame(bytes) => write!(f, "RawEmgFrame(len={})", bytes.len()),
+            Self::RawEmgConfiguration(config) => {
+                f.debug_tuple("RawEmgConfiguration").field(config).finish()
+            }
+            Self::RawEmgState(on) => f.debug_tuple("RawEmgState").field(on).finish(),
+            Self::RawEmgFailure(message) => f.debug_tuple("RawEmgFailure").field(message).finish(),
+            Self::CeremonyStage(stage) => f.debug_tuple("CeremonyStage").field(stage).finish(),
+            Self::CeremonyHttp(request) => f.debug_tuple("CeremonyHttp").field(request).finish(),
+            Self::CeremonyCompleted(identity) => {
+                f.debug_tuple("CeremonyCompleted").field(identity).finish()
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod battery_detail_tests {
+    use super::*;
+    use crate::proto::{field_bytes, field_int};
+
+    #[test]
+    fn reads_temperature_voltage_and_a_negative_current() {
+        // As firmware 1054928927 answered while charging: 52 %, 32.85 °C, 4091 mV, −126 mA.
+        let mut battery = [field_int(1, 52), field_int(2, 1)].concat();
+        battery.extend([0x1d]);
+        battery.extend(32.85f32.to_le_bytes());
+        battery.extend([field_int(4, 4091), field_int(5, (-126i64) as u64), field_int(6, 6_527_007)].concat());
+        let response = [field_int(1, 1), field_int(2, 1), field_bytes(3, &field_bytes(1, &battery))].concat();
+        let detail = BatteryDetail::from_response(&response).unwrap();
+        assert_eq!(detail, BatteryDetail { temperature_c: Some(32.85), millivolts: Some(4091), milliamps: Some(-126), counter: Some(6_527_007) });
+        assert_eq!(BatteryStatus::from_response(&response).unwrap(), BatteryStatus { level: 52, charging: Some(true) });
+    }
+}

@@ -1,0 +1,11 @@
+// Shared build settings. Your signing team and (optionally) bundle id go in Config/Local.xcconfig,
+// which is git-ignored. Copy Config/Local.xcconfig.example to Config/Local.xcconfig and fill it in.
+PRODUCT_BUNDLE_IDENTIFIER = dev.neuralplayground.app
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+DEVELOPMENT_TEAM =
+// The Mac serving dongle releases over Tailscale (`make release` + `make serve`), e.g.
+// my-mac.tailnet-name.ts.net. Set it in Config/Local.xcconfig or ~/.config/neural-playground/build.env.
+DONGLE_RELEASES_HOST =
+
+#include? "Local.xcconfig"

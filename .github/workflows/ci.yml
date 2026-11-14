@@ -1,0 +1,30 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  swift:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: NeuralBandKit tests
+        run: cd NeuralBandKit && swift test
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: band-core tests
+        run: cd firmware/band-core && cargo test -q
+      - name: np-profiles tests
+        run: cd firmware/np-profiles && cargo test -q
+      - name: dongle-pack builds
+        run: cd firmware/dongle-pack && cargo build -q
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: tools/check-secrets.sh

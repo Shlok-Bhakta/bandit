@@ -1,0 +1,31 @@
+# Build products
+build/
+DerivedData/
+.build/
+.swiftpm/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Local signing (your Apple team ID lives here, not in git)
+Config/Local.xcconfig
+
+# Band credentials must never be committed
+*band.json
+*air-gestures-band*.json
+*.npbackup
+owner.key
+owner.pending.key
+meta-session.json
+*.diagnostics.json
+
+.DS_Store
+
+# Gala Engine run state
+.gala/
+
+# Dongle release output (served over Tailscale; rebuilt by firmware/band-dongle/release.sh)
+firmware/dist/
+
+# Local build settings and tokens
+.env
