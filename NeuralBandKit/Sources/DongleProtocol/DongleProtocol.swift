@@ -263,6 +263,9 @@ public enum DongleCommand: Equatable, Sendable {
     case profilesReset
     /// The set the dongle runs, as log lines (`ProfileDump` reads them).
     case profilesShow
+    case buzz(String)
+    case buzzTry(String)
+    case lab(Bool)
 
     /// Keys the firmware knows for `key <name>`.
     public static let keys = ["playpause", "next", "previous", "volup", "voldown", "voice", "phonemute", "teamsmute", "right", "left", "blank"]
@@ -295,6 +298,9 @@ public enum DongleCommand: Equatable, Sendable {
         case .profilesCommit: "profiles commit"
         case .profilesReset: "profiles reset"
         case .profilesShow: "profiles show"
+        case .buzz(let name): "buzz \(Self.word(name))"
+        case .buzzTry(let pattern): "buzz try \(pattern.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " "))"
+        case .lab(let on): "lab \(on ? "on" : "off")"
         }
     }
 

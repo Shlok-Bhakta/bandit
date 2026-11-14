@@ -74,6 +74,7 @@ extension ProfileGesture {
         case .swipeRight: "arrow.right"
         case .dialCW: "arrow.clockwise"
         case .dialCCW: "arrow.counterclockwise"
+        default: rawValue.hasPrefix("flick.") ? "hand.draw" : "waveform.path"
         }
     }
 
@@ -83,6 +84,8 @@ extension ProfileGesture {
         case .middle: Theme.mint
         case .swipe: Theme.violet
         case .dial: Theme.warn
+        case .flick: Theme.mint
+        case .band: Theme.violet
         }
     }
 }

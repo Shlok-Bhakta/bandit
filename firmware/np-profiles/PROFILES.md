@@ -67,6 +67,8 @@ earlier firmware did.
 | `name` | optional | Up to 40 characters, shown in the app |
 | `menu` | optional | The letter menu: one letter or digit (`a`–`z`, `0`–`9`) → an action (anything but `hold:` and `menu`). Letters you write that aren't here get one long buzz |
 | `start` | optional | The profile a host starts in, by `phone`, `computer` and `tv`. Each must allow that kind. Default: the first profile that allows it |
+| `buzzes` | optional | Your own buzz patterns, by name (below). Up to 16 |
+| `feedback` | optional | What the band buzzes by itself, by moment: a pattern's name, or `none` (below) |
 | `profiles` | required | 1–12 profiles |
 
 **A profile:**
@@ -75,7 +77,7 @@ earlier firmware did.
 | --- | --- | --- |
 | `id` | required | 1–16 of `a`–`z`, `0`–`9`, `-`; unique |
 | `name` | required | 1–24 characters |
-| `buzz` | optional | 1–4 short buzzes when you switch to it (default 1), so you can tell where you landed |
+| `buzz` | optional | Played when you switch to it, so you can tell where you landed: 1–4 short buzzes (default 1), or a pattern's name (`"rise"`) |
 | `hosts` | optional | Who may use it: any of `phone`, `computer`, `mac`, `windows`, `linux`, `tv`. Default: everyone. Switching a host to a profile it can't use gets one long buzz |
 | `typing` | optional | The band's handwriting is typed on the computer. The model sleeps after 90 s with nothing written; any gesture in this profile wakes it |
 | `pointer` | optional | Pinch, hold and move the wrist moves the mouse pointer (computers). The dial is off while pointing |
@@ -97,6 +99,30 @@ ignores them, but they count towards the size limit.
 | `index.hold` | Pinch, hold for a moment and let go **without turning** (or moving the pointer). Usually `menu` |
 | `swipe.up` · `swipe.down` · `swipe.left` · `swipe.right` | Swipe the thumb along the side of the index finger |
 | `dial.cw` · `dial.ccw` | Pinch and turn the wrist: one step per 9° detent, clockwise or anticlockwise. Mirrored on the left wrist, so "clockwise" is the same turn on either hand |
+| `flick.up` · `flick.down` · `flick.left` · `flick.right` | Pinch, hold, and flick the wrist (the way the air mouse would go: bend the hand up or down, or swing it left or right). It fires during the hold, once per flick, so you can flick again before letting go. Firmware 0.15.0 |
+| `band.<event>` · `band.<finger>.<event>` | Whatever the band itself reports, as it reports it (below). Firmware 0.15.0 |
+
+**Flicks** need wrist motion, so the first flick of a pinch waits for it to start (a moment), and
+the motion stays on for 30 s after a pinch in a profile with flicks. A flick back the other way
+right after one isn't a second flick. A pinch that flicked or turned isn't `index.hold` when it
+lets go. A `pointer` profile has no flicks on a computer: there the pinch moves the pointer.
+
+### Band events (experimental)
+
+The band's own gesture messages name a finger (`thumb`, `index`, `middle`) and an event. The
+named gestures above are built from them; `band.` gestures are the messages themselves, so you can
+try everything the band can say. `band.index.click` fires when a message from the index finger
+says `click`; `band.click` fires for any finger. Both fire alongside the named gestures, so
+`band.index.singleTap` and `index.tap` are the same tap. Events (the band's two tables):
+
+- `press` `release` `tap` `doubletap` `click` `up` `down` `left` `right` `wake` `swipeIn`
+  `swipeOut` `ia` `partialPress` `partialRelease` `partialClick` `partialUp` `partialDown`
+  `partialLeft` `partialRight`
+- `singleTap` `doubleTap` `buttonHold` `buttonRelease` `buttonUp` `buttonDown` `buttonLeft`
+  `buttonRight` `buttonPress` `buttonHoldRelease`
+
+Many of these are never sent, or only in some band states: the app's **Gesture lab** shows what
+yours sends as you do it. The same message repeated within 0.15 s fires once.
 
 **Taps wait only when they must.** The band reports every tap. A single tap acts at once unless
 the same profile also binds the double tap of that finger. Then it waits 0.4 s to rule out a second
@@ -134,6 +160,12 @@ when there's a default. Keys are `phone`, `computer`, `mac`, `windows`, `linux`,
 | `host:<kind>` | To the first connected host of a kind: `host:phone`, `host:computer`, `host:mac`, `host:tv`, … | |
 | `menu` | Opens the letter menu | |
 | `write` · `write:<3–60>` | Handwriting on (two buzzes): what you write is typed. Each letter restarts the timer; one buzz when it turns off, 10 s (or the given seconds) after the last. Again while it's on: off now | Computer, TV |
+| `buzz:<pattern>` | Plays a buzz pattern (a built-in one or one of the file's `buzzes`) | All |
+| `apps:next` · `apps:previous` | The app switcher: ⌘Tab (Alt+Tab on Windows and Linux), or with Shift. On a flick, ⌘ stays down until the pinch lets go, so each flick moves one app and letting go picks it. Elsewhere it's one ⌘Tab: back to the last app | Computer |
+
+**A binding's own buzz:** the object form may add `"buzz"`, a pattern played when its action runs:
+`"flick.left": { "default": "media:previous", "buzz": "tick" }`. Without one, the set's
+`feedback.gesture` plays (none by default).
 
 **Chords:** modifiers `cmd` (also `command`, `win`, `super`), `ctrl`, `alt` (also `option`) and
 `shift`, joined with `+`, then one key. Windows and Linux get `cmd` as Ctrl, so `key:cmd+c` copies
@@ -146,6 +178,50 @@ everywhere. Keys:
 - any US-keyboard symbol: `- = [ ] \ ; ' ` , . /`, and their shifted versions `_ + { } | : " ~ < > ? ! @ # $ % ^ & * ( )`.
 
 `key:cmd++` is ⌘ and plus.
+
+## Buzz patterns
+
+A pattern is pulses and pauses, in milliseconds: `250 _200 250*90` is a 250 ms pulse, a 200 ms
+pause, and a 250 ms pulse at strength 90. Strength is 1–100 (default 70). Pulses are 20–2000 ms,
+pauses 20–3000 ms, at most 16 steps, 8 s and 120 characters; a pattern starts and ends with a
+pulse. The band takes each pulse as its own request, so pauses under about 100 ms may stretch.
+
+Built in (a file's `buzzes` may redefine any of them, and the new one is used everywhere):
+
+| Name | Pattern | Name | Pattern |
+| --- | --- | --- | --- |
+| `tick` | `40*55` | `done` | `250*78 _200 250*78` |
+| `tap` | `60*63` | `question` | `70*67 _130 70*67 _130 380*86` |
+| `double` | `60*63 _190 60*63` | `error` | `900*90` |
+| `triple` | three taps | `ring` | `600*90 _300 600*90` |
+| `quad` | four taps | `heartbeat` | `90*85 _110 70*45` |
+| `long` | `400*78` | `rise` · `fall` | four pulses getting stronger · weaker |
+| `nudge` | `30*50` | | |
+
+Names are 1–16 of `a`–`z`, `0`–`9` and `-` (not `none`).
+
+```json
+"buzzes": { "zap": "40*100 _60 40*100", "done": "120 _80 120 _80 300*95" },
+"feedback": { "alert.question": "zap", "connected": "none", "gesture": "tick" }
+```
+
+**`feedback`** says what the band buzzes by itself. Each moment takes a pattern's name or `none`:
+
+| Moment | When | Default |
+| --- | --- | --- |
+| `connected` | The band connected to the dongle | `tap` |
+| `refused` | Something didn't work: a profile this host can't use, no host to switch to, a letter the menu doesn't know, no call to answer | `long` |
+| `host.phone` · `host.computer` | Gestures now go to a phone · a computer or TV | `tap` · `double` |
+| `alert.done` · `alert.question` · `alert.error` | A computer's helper (np-appwatch): an agent finished, asks something, failed | `done` · `question` · `error` |
+| `call.ringing` | An iPhone call rings (again every 3 s, or after the pattern if it's longer) | `ring` |
+| `write.on` · `write.off` | Handwriting on: write now · off | `double` · `tap` |
+| `menu.ready` | The letter menu is ready for its letter | `double` |
+| `hold.start` | `middle.hold` began (speak now) | `tick` |
+| `gesture` | Any gesture that ran an action, unless its binding has its own `buzz` | `none` |
+
+Switching profile plays that profile's `buzz` instead of `host.*`. Over the control service,
+`buzz <name>` plays a pattern of the dongle's set and `buzz try <pattern>` plays one you're
+designing (the app's pattern editor).
 
 ## The letter menu
 

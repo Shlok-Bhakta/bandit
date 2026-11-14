@@ -24,7 +24,6 @@ struct ProfilesView: View {
                 ValidationRow(error: store.validation, size: store.size)
                 if let error = store.saveError { Text(error).font(.footnote).foregroundStyle(Theme.danger) }
             }
-            sendSection
             Section {
                 ForEach(store.set.profiles, id: \.uid) { profile in
                     NavigationLink(value: ProfileRoute.profile(profile.uid)) {
@@ -49,6 +48,8 @@ struct ProfilesView: View {
                 Text("Every host has its own active profile. On the band: pinch, hold and let go, then write a menu letter to switch.")
             }
             Section {
+                NavigationLink { BuzzesView() } label: { Label("Buzzes", systemImage: "waveform") }
+                NavigationLink { FeedbackView() } label: { Label("Feedback", systemImage: "hand.tap") }
                 NavigationLink(value: ProfileRoute.menu) {
                     LabeledContent {
                         Text("\(store.set.menu.count) letters")
@@ -61,6 +62,10 @@ struct ProfilesView: View {
             } header: {
                 Text("The whole set")
             }
+            Section("Discover") {
+                NavigationLink { GestureLabView() } label: { Label("Gesture lab", systemImage: "waveform.path") }
+            }
+            sendSection
             fileSection
         }
         .darkList()
@@ -128,7 +133,7 @@ struct ProfilesView: View {
             Button(role: .destructive) { confirmReset = true } label: { Label("Erase the dongle's set (back to built-in)", systemImage: "trash") }
                 .disabled(uploader.isBusy || !model.link.isReady || model.status?.profileHash == ProfileFormat.builtinHash || model.status?.supportsProfiles != true)
         } footer: {
-            Text("The app checks the set with the dongle's own rules, sends it minified (at most \(ProfileFormat.maxBytes) bytes), and waits for the dongle to report the same hash. Get the dongle's set when it was changed from somewhere else, like over USB.")
+            Text("Edits save on this phone. Send to apply them on the dongle. Get copies the dongle’s current setup onto this phone.")
         }
     }
 

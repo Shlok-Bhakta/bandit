@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		014104CCAFF4824DB6650CA5 /* BuzzesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FE2E7634B9A4C3D847177A8 /* BuzzesView.swift */; };
 		0310EA925DE37DC07464ED60 /* BandProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 810411E6E657A094D478BF39 /* BandProtocol */; };
 		068C9AB8E576E16A767D2143 /* DongleProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = B15E01177A22D83BDFD64165 /* DongleProtocol */; };
 		07AD589C5AA4B4CF293E9FA3 /* BandTransport in Frameworks */ = {isa = PBXBuildFile; productRef = 62BCD9C37727CCF3C87AA219 /* BandTransport */; };
@@ -27,6 +28,7 @@
 		4C0200BD6F0F06275BB28014 /* FirmwareView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0152DE474C3D7335C948AA21 /* FirmwareView.swift */; };
 		4C622929E658E812A3EBE215 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F61A22E606C830DBABBAD97 /* Theme.swift */; };
 		4D0320962265FE23AE45B6AA /* SafeCrackerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0397743D5C270D1E71C8A93 /* SafeCrackerView.swift */; };
+		502C328EF2A8819915CEABF4 /* GestureLabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AC1A69E59AF0BACFBD9677D /* GestureLabView.swift */; };
 		502D982109D3444023CFB116 /* HandwritingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3459818A34ED4EE8EA9970CF /* HandwritingView.swift */; };
 		51E625FBD569315B966106FD /* MotionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2E987F42C55A8AC7D27084C /* MotionEngine.swift */; };
 		535444D02D6AE364F2F1CF29 /* ProfileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D12353E06B34A70C983E5782 /* ProfileStore.swift */; };
@@ -104,6 +106,7 @@
 		1C710B138E7260B3335768D0 /* DongleModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DongleModel.swift; sourceTree = "<group>"; };
 		26BBAEC92DF0A24627F9F366 /* NeuralBandKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = NeuralBandKit; path = NeuralBandKit; sourceTree = SOURCE_ROOT; };
 		3459818A34ED4EE8EA9970CF /* HandwritingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandwritingView.swift; sourceTree = "<group>"; };
+		3AC1A69E59AF0BACFBD9677D /* GestureLabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GestureLabView.swift; sourceTree = "<group>"; };
 		3E9240C870E156DE9623EC1D /* NPDongleWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = NPDongleWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		4439E7A7D4D0A27DE9C2F9A1 /* NPDongle.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = NPDongle.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4533B8383EDF68B685A2149D /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
@@ -126,6 +129,7 @@
 		7F61A22E606C830DBABBAD97 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		8583FC8232A3D0676D2C1B64 /* LiveActivities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivities.swift; sourceTree = "<group>"; };
 		8E92F05B6CC8E99E6829C5D1 /* Sharing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sharing.swift; sourceTree = "<group>"; };
+		8FE2E7634B9A4C3D847177A8 /* BuzzesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuzzesView.swift; sourceTree = "<group>"; };
 		96F48172A5830F31AD3753D0 /* NPDongleApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NPDongleApp.swift; sourceTree = "<group>"; };
 		99816B1FBE9AB32DB3CD4D22 /* ActionEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionEditor.swift; sourceTree = "<group>"; };
 		999E9BFFD36EE8A2AEA52569 /* ProfilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfilesView.swift; sourceTree = "<group>"; };
@@ -292,6 +296,8 @@
 			isa = PBXGroup;
 			children = (
 				99816B1FBE9AB32DB3CD4D22 /* ActionEditor.swift */,
+				8FE2E7634B9A4C3D847177A8 /* BuzzesView.swift */,
+				3AC1A69E59AF0BACFBD9677D /* GestureLabView.swift */,
 				5E7CF5F1203A630CF5E97F42 /* ProfileEditorView.swift */,
 				999E9BFFD36EE8A2AEA52569 /* ProfilesView.swift */,
 				ADE72DF95D9B6D75414A0DE0 /* ReferenceView.swift */,
@@ -561,11 +567,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				5660C1D58347ED844E5F1393 /* ActionEditor.swift in Sources */,
+				014104CCAFF4824DB6650CA5 /* BuzzesView.swift in Sources */,
 				74144108A35A318CE410523B /* DongleActivityAttributes.swift in Sources */,
 				8BE093D150C75D1155F685DC /* DongleLink.swift in Sources */,
 				E09E0A31490C9E1602F12876 /* DongleModel.swift in Sources */,
 				1B17133611C1C8E141AC53B0 /* DongleUpdate.swift in Sources */,
 				F4F4C9CA8E31AD495B74FDBF /* FirmwareView.swift in Sources */,
+				502C328EF2A8819915CEABF4 /* GestureLabView.swift in Sources */,
 				090EFE4AF9DEF309369BC0E8 /* HomeView.swift in Sources */,
 				9153D7E60940F2536D37382C /* LiveActivities.swift in Sources */,
 				7F0C68270D2A13C66C1B1215 /* NPDongleApp.swift in Sources */,

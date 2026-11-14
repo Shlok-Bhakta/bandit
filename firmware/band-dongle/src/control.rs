@@ -47,6 +47,15 @@ pub fn paused() -> bool { PAUSED.load(Ordering::SeqCst) }
 /// Power experiments (`power motion|writing on|auto`): keep the band's wrist motion or its
 /// handwriting model on regardless of gestures, to measure what they cost. Not saved.
 pub static FORCE_MOTION: AtomicBool = AtomicBool::new(false);
+/// The gesture lab logs every band message in full until this uptime (s): `lab on` sets it 10
+/// minutes ahead (the app says it again while its lab is open), `lab off` clears it.
+static LAB_UNTIL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+const LAB_SECONDS: u32 = 600;
+
+fn uptime_seconds() -> u32 { (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1_000_000) as u32 }
+
+/// Whether the gesture lab is on (`lab on`): full gesture messages and flick peaks in the log.
+pub fn lab_on() -> bool { uptime_seconds() < LAB_UNTIL.load(Ordering::Relaxed) }
 pub static FORCE_WRITING: AtomicBool = AtomicBool::new(false);
 
 // ---- the band, as the status reports it ----
@@ -379,9 +388,28 @@ pub fn run(remote: &Remote, line: &str, from: Option<u16>) {
             if let Err(error) = result { warn!("CONTROL: {error}"); }
         }
         // A computer's helper (np-appwatch): an agent finished, asks something, or failed.
+        // Also any pattern of the dongle's set by name, or one being designed (`buzz try <pattern>`).
         "buzz" => match crate::remote::Alert::from_word(rest) {
             Some(alert) => remote.alert(alert),
-            None => warn!("CONTROL: buzz done|question|error"),
+            None => match rest.strip_prefix("try ") {
+                Some(text) => match np_profiles::parse_pattern(text.trim()) {
+                    Ok(pattern) => remote.play(pattern),
+                    Err(error) => warn!("CONTROL: buzz try: {error}"),
+                },
+                None => match profiles::current().pattern(rest) {
+                    Some(pattern) => remote.play(pattern),
+                    None => warn!("CONTROL: buzz done|question|error|<pattern name>|try <pattern>"),
+                },
+            },
+        },
+        "lab" => match rest {
+            "on" => {
+                let was = lab_on();
+                LAB_UNTIL.store(uptime_seconds() + LAB_SECONDS, Ordering::Relaxed);
+                if !was { info!("LAB on: every band message in full, and flick peaks, for {} min", LAB_SECONDS / 60); }
+            }
+            "off" => { LAB_UNTIL.store(0, Ordering::Relaxed); info!("LAB off"); }
+            _ => warn!("CONTROL: lab on|off"),
         },
         // A computer's helper (np-appwatch): the bundle id of the app now in front (none: it
         // paused or quit, so the computer goes back to its own profile).

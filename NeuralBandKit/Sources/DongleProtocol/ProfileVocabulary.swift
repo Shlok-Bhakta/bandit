@@ -5,16 +5,16 @@ import Foundation
 
 extension ProfileGesture {
     public enum Group: String, CaseIterable, Sendable {
-        case index = "Index finger", middle = "Middle finger", swipe = "Thumb swipes", dial = "Pinch and turn"
+        case index = "Taps", middle = "Holds", swipe = "Swipes", dial = "Dial", flick = "Flicks", band = "Band events (experimental)"
     }
 
     public var group: Group {
-        switch self {
-        case .indexTap, .indexDoubleTap, .indexTripleTap, .indexHold: .index
-        case .middleTap, .middleDoubleTap, .middleTripleTap, .middleHold: .middle
-        case .swipeUp, .swipeDown, .swipeLeft, .swipeRight: .swipe
-        case .dialCW, .dialCCW: .dial
-        }
+        if rawValue.hasPrefix("band.") { return .band }
+        if rawValue.hasPrefix("flick.") { return .flick }
+        if rawValue.hasSuffix("hold") { return .middle }
+        if rawValue.hasPrefix("swipe.") { return .swipe }
+        if rawValue.hasPrefix("dial.") { return .dial }
+        return .index
     }
 
     public var title: String {
@@ -33,6 +33,7 @@ extension ProfileGesture {
         case .swipeRight: "Swipe right"
         case .dialCW: "Turn clockwise"
         case .dialCCW: "Turn anticlockwise"
+        default: rawValue.hasPrefix("flick.") ? "Flick " + rawValue.dropFirst(6) : rawValue
         }
     }
 
@@ -44,6 +45,7 @@ extension ProfileGesture {
         case .middleHold: "Hold the middle finger to the thumb. A hold: chord stays pressed until you let go; anything else happens at the start."
         case .swipeUp, .swipeDown, .swipeLeft, .swipeRight: "Swipe the thumb along the side of the index finger."
         case .dialCW, .dialCCW: "Pinch and turn the wrist: one step per 9° detent (mirrored on the left wrist)."
+        default: rawValue.hasPrefix("flick.") ? "Pinch, hold and flick the wrist. Repeat during the hold. Firmware 0.15.0. Air mouse takes priority on computers." : "Raw band event, alongside named gestures. Firmware 0.15.0. Discover events in Gesture lab."
         }
     }
 
@@ -99,6 +101,8 @@ extension ProfileFormat {
 
     /// Every action form, with what it does (the Reference screen and the assistant brief).
     public static let actionReference: [(action: String, meaning: String)] = [
+        ("buzz:<pattern>", "Play a built-in or custom buzz pattern"),
+        ("apps:next · apps:previous", "Computer app switcher. Best on flicks: keep pinching to browse, release to choose"),
         ("none", "Nothing (beats a default)"),
         ("media:playPause · next · previous · volumeUp · volumeDown · mute", "Media keys, every host"),
         ("media:voice", "Dictation on a Mac, Siri on an iPhone"),
@@ -125,9 +129,12 @@ extension ProfileFormat {
 
         Rules:
         - Top level: "format": "np-profiles", "version": 1, optional "name" (≤ 40 characters), optional "menu" (one letter a–z or digit 0–9 → an action other than hold: and menu), optional "start" ({"phone"|"computer"|"tv": profile id}; the profile must allow that kind), "profiles": 1–12 profiles.
-        - A profile: "id" (1–16 of a–z, 0–9, -; unique), "name" (1–24 characters), optional "buzz" (1–4), "hosts" (any of phone, computer, mac, windows, linux, tv; default everyone), "typing" (handwriting is typed on computers), "pointer" (pinch-hold and move the wrist moves the mouse on computers; the dial is off), "gestures" (gesture → action), "apps" (up to 16 Mac bundle ids, like com.google.Chrome: a computer whose helper reports one of them in front switches to this profile; each app in one profile only). Optional app fields: "description", "symbol" (an SF Symbol name), "color" ("#rrggbb").
+        - A profile: "id" (1–16 of a–z, 0–9, -; unique), "name" (1–24 characters), optional "buzz" (1–4 or a pattern name), "hosts" (any of phone, computer, mac, windows, linux, tv; default everyone), "typing" (handwriting is typed on computers), "pointer" (pinch-hold and move the wrist moves the mouse on computers; the dial is off), "gestures" (gesture → action), "apps" (up to 16 Mac bundle ids, like com.google.Chrome: a computer whose helper reports one of them in front switches to this profile; each app in one profile only). Optional app fields: "description", "symbol" (an SF Symbol name), "color" ("#rrggbb").
         - A gesture maps to one action string, or to an object by host kind: {"phone": …, "computer": …, "mac": …, "windows": …, "linux": …, "tv": …, "default": …}. The most specific kind wins (mac beats computer), then default.
         - At most \(maxBytes) bytes minified. Windows and Linux get cmd as Ctrl, so key:cmd+c copies everywhere.
+
+        Buzzes: optional top-level "buzzes" maps up to 16 names (1–16 of a–z, 0–9, -, except none) to pattern strings. Built-ins: \(builtinBuzzes.map(\.name).joined(separator: ", ")). A pattern is pulses ms or ms*strength (1–100, default 70), and pauses _ms; e.g. 250 _200 250*90. Pulses 20–2000 ms, pauses 20–3000 ms, up to 16 steps, 8000 ms, 120 bytes; start/end with a pulse. Built-ins may be redefined.
+        Optional "feedback" maps moments (\(BuzzFeedback.all.map(\.name).joined(separator: ", "))) to a pattern name or none. A binding object may also contain "buzz": "tick".
 
         Gestures:
         \(gestures)

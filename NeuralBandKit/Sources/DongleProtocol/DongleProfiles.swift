@@ -92,11 +92,39 @@ public enum ProfileHosts: String, CaseIterable, Sendable {
 }
 
 /// Everything a profile can bind.
-public enum ProfileGesture: String, CaseIterable, Sendable {
-    case indexTap = "index.tap", indexDoubleTap = "index.doubleTap", indexTripleTap = "index.tripleTap", indexHold = "index.hold"
-    case middleTap = "middle.tap", middleDoubleTap = "middle.doubleTap", middleTripleTap = "middle.tripleTap", middleHold = "middle.hold"
-    case swipeUp = "swipe.up", swipeDown = "swipe.down", swipeLeft = "swipe.left", swipeRight = "swipe.right"
-    case dialCW = "dial.cw", dialCCW = "dial.ccw"
+public struct ProfileGesture: RawRepresentable, Hashable, CaseIterable, Sendable {
+    public let rawValue: String
+    private init(_ name: String) { rawValue = name }
+    public init?(rawValue: String) {
+        guard Self.allCases.contains(where: { $0.rawValue == rawValue }) else { return nil }
+        self.rawValue = rawValue
+    }
+    public static let indexTap = Self("index.tap")
+    public static let indexDoubleTap = Self("index.doubleTap")
+    public static let indexTripleTap = Self("index.tripleTap")
+    public static let indexHold = Self("index.hold")
+    public static let middleTap = Self("middle.tap")
+    public static let middleDoubleTap = Self("middle.doubleTap")
+    public static let middleTripleTap = Self("middle.tripleTap")
+    public static let middleHold = Self("middle.hold")
+    public static let swipeUp = Self("swipe.up")
+    public static let swipeDown = Self("swipe.down")
+    public static let swipeLeft = Self("swipe.left")
+    public static let swipeRight = Self("swipe.right")
+    public static let dialCW = Self("dial.cw")
+    public static let dialCCW = Self("dial.ccw")
+    public static let flickUp = Self("flick.up")
+    public static let flickDown = Self("flick.down")
+    public static let flickLeft = Self("flick.left")
+    public static let flickRight = Self("flick.right")
+    public static let named: [Self] = [.indexTap, .indexDoubleTap, .indexTripleTap, .indexHold, .middleTap, .middleDoubleTap, .middleTripleTap, .middleHold, .swipeUp, .swipeDown, .swipeLeft, .swipeRight, .dialCW, .dialCCW, .flickUp, .flickDown, .flickLeft, .flickRight]
+    public static let bandFingers = ["thumb", "index", "middle"]
+    public static let bandEvents = ["press", "release", "tap", "doubletap", "click", "up", "down", "left", "right", "wake", "swipeIn", "swipeOut", "ia", "partialPress", "partialRelease", "partialClick", "partialUp", "partialDown", "partialLeft", "partialRight", "singleTap", "doubleTap", "buttonHold", "buttonRelease", "buttonUp", "buttonDown", "buttonLeft", "buttonRight", "buttonPress", "buttonHoldRelease"]
+    public static let band: [Self] = ([""] + bandFingers).flatMap { finger in
+        bandEvents.map { Self("band." + (finger.isEmpty ? "" : finger + ".") + $0) }
+    }
+    public static let allCases = named + band
+    public var requiresNewFirmware: Bool { rawValue.hasPrefix("flick.") || rawValue.hasPrefix("band.") }
 }
 
 public enum MediaKey: String, CaseIterable, Sendable {
@@ -169,6 +197,8 @@ public enum ProfileAction: Equatable, Sendable {
     case menu
     /// Handwriting on, typed on the host, until nothing is written for this many seconds.
     case write(Int)
+    case buzz(Pattern)
+    case apps(Bool)
 }
 
 // MARK: the checked set
@@ -178,9 +208,10 @@ public struct ParsedProfileSet: Equatable, Sendable {
     public struct Binding: Equatable, Sendable {
         public var defaultAction: ProfileAction?
         public var variants: [(hosts: ProfileHosts, action: ProfileAction)]
+        public var buzz: Pattern? = nil
 
         public static func == (a: Binding, b: Binding) -> Bool {
-            a.defaultAction == b.defaultAction && a.variants.elementsEqual(b.variants) { $0.hosts == $1.hosts && $0.action == $1.action }
+            a.buzz == b.buzz && a.defaultAction == b.defaultAction && a.variants.elementsEqual(b.variants) { $0.hosts == $1.hosts && $0.action == $1.action }
         }
 
         /// An exact kind's variant, then `computer`'s, then the default; `none` is no action.
@@ -196,7 +227,7 @@ public struct ParsedProfileSet: Equatable, Sendable {
     public struct Profile: Equatable, Sendable {
         public var id: String
         public var name: String
-        public var buzz: Int
+        public var buzz: Pattern
         /// Empty: everyone.
         public var hosts: [ProfileHosts]
         public var typing: Bool
@@ -214,6 +245,8 @@ public struct ParsedProfileSet: Equatable, Sendable {
     public var menu: [String: ProfileAction]
     /// Start profile ids for phone, computer and tv.
     public var start: [String]
+    public var buzzes: [String: Pattern] = [:]
+    public var feedback: [String: Pattern] = [:]
 
     public func startProfile(for type: DongleCommand.HostType) -> String {
         start[type == .phone ? 0 : type == .tv ? 2 : 1]
@@ -228,7 +261,7 @@ private struct RawFile {
     struct Profile {
         var id: String
         var name: String
-        var buzz: Int
+        var buzz: JSONValue
         var hosts: [String]
         var typing: Bool
         var pointer: Bool
@@ -242,6 +275,8 @@ private struct RawFile {
     var menu: JSONObject
     var start: JSONObject
     var profiles: [Profile]
+    var buzzes: JSONObject
+    var feedback: JSONObject
 
     static func invalid(_ message: String) -> ProfileError { ProfileError("", "not np-profiles JSON: \(message)") }
 
@@ -282,7 +317,7 @@ private struct RawFile {
     }
 
     init(_ value: JSONValue) throws {
-        let fields = try Self.fields(value, ["format", "version", "name", "menu", "start", "profiles"], what: "an np-profiles object")
+        let fields = try Self.fields(value, ["format", "version", "name", "menu", "start", "profiles", "buzzes", "feedback"], what: "an np-profiles object")
         format = try Self.string(fields["format"], "format")
         guard let versionValue = fields["version"] else { throw Self.invalid("missing field `version`") }
         guard let version = versionValue.integer, version >= 0 else {
@@ -292,15 +327,13 @@ private struct RawFile {
         name = try Self.string(fields["name"], "name", default: "")
         menu = try Self.stringMap(fields["menu"], "menu")
         start = try Self.stringMap(fields["start"], "start")
+        buzzes = try Self.stringMap(fields["buzzes"], "buzzes")
+        feedback = try Self.stringMap(fields["feedback"], "feedback")
         guard let list = fields["profiles"] else { throw Self.invalid("missing field `profiles`") }
         guard let items = list.array else { throw Self.invalid("invalid type: \(list.typeName), expected a sequence (`profiles`)") }
         profiles = try items.map { item in
             let fields = try Self.fields(item, ["id", "name", "buzz", "hosts", "typing", "pointer", "gestures", "apps"], what: "a profile")
-            var buzz = 1
-            if let value = fields["buzz"] {
-                guard let count = value.integer, (0...255).contains(count) else { throw Self.invalid("invalid value: \(value.minified), expected u8 (`buzz`)") }
-                buzz = Int(count)
-            }
+            let buzz = fields["buzz"] ?? .null
             var hosts: [String] = []
             if let value = fields["hosts"] {
                 guard let list = value.array else { throw Self.invalid("invalid type: \(value.typeName), expected a sequence (`hosts`)") }
@@ -328,6 +361,14 @@ private struct RawFile {
         if version != F.version { throw ProfileError("version", "\(version) isn't supported (this dongle reads version \(F.version))") }
         if name.unicodeScalars.count > 40 { throw ProfileError("name", "at most 40 characters") }
         if profiles.isEmpty || profiles.count > F.maxProfiles { throw ProfileError("profiles", "1 to \(F.maxProfiles) profiles") }
+        if buzzes.sortedUnique.count > 16 { throw ProfileError("buzzes", "at most 16 buzz patterns") }
+        var patterns: [String: Pattern] = [:]
+        for member in buzzes.sortedUnique {
+            let path = "buzzes.\(member.key)"
+            if !F.isValidID(member.key) { throw ProfileError(path, "a pattern's name is 1–16 of a–z, 0–9 and -") }
+            if member.key == "none" { throw ProfileError(path, "\"none\" means no buzz: pick another name") }
+            patterns[member.key] = try F.parsePattern(member.value.string!, path: path)
+        }
         let ids = profiles.map(\.id)
         var parsed: [ParsedProfileSet.Profile] = []
         for (i, raw) in profiles.enumerated() {
@@ -336,7 +377,15 @@ private struct RawFile {
             if ids[..<i].contains(raw.id) { throw ProfileError("\(at).id", "\"\(raw.id)\" is used twice") }
             let nameLength = raw.name.unicodeScalars.count
             if nameLength == 0 || nameLength > 24 { throw ProfileError("\(at).name", "1–24 characters") }
-            if !(1...4).contains(raw.buzz) { throw ProfileError("\(at).buzz", "1–4 buzzes") }
+            let buzz: Pattern
+            switch raw.buzz {
+            case .null: buzz = try F.findBuzz("tap", buzzes: patterns, path: "\(at).buzz")
+            case .string(let name): buzz = try F.findBuzz(name, buzzes: patterns, path: "\(at).buzz")
+            case .integer, .number:
+                guard let n = raw.buzz.integer, (1...4).contains(n) else { throw ProfileError("\(at).buzz", "1–4 buzzes") }
+                buzz = try F.findBuzz(["tap", "double", "triple", "quad"][Int(n)-1], buzzes: patterns, path: "\(at).buzz")
+            default: throw ProfileError("\(at).buzz", "1–4 buzzes, or a pattern's name")
+            }
             var hosts: [ProfileHosts] = []
             for (j, name) in raw.hosts.enumerated() {
                 guard let host = ProfileHosts(rawValue: name) else { throw ProfileError("\(at).hosts[\(j)]", F.unknownHosts(name)) }
@@ -355,11 +404,11 @@ private struct RawFile {
             for member in raw.gestures.sortedUnique {
                 let path = "\(at).gestures.\(member.key)"
                 guard let gesture = ProfileGesture(rawValue: member.key) else {
-                    throw ProfileError(path, "unknown gesture (one of \(ProfileGesture.allCases.map(\.rawValue).joined(separator: ", ")))")
+                    throw ProfileError(path, "unknown gesture (one of \(ProfileGesture.named.map(\.rawValue).joined(separator: ", ")), or band.<event> / band.<finger>.<event>)")
                 }
-                gestures[gesture] = try F.parseBinding(member.value, gesture: gesture, ids: ids, path: path)
+                gestures[gesture] = try F.parseBinding(member.value, gesture: gesture, ids: ids, path: path, buzzes: patterns)
             }
-            parsed.append(.init(id: raw.id, name: raw.name, buzz: raw.buzz, hosts: hosts, typing: raw.typing, pointer: raw.pointer, gestures: gestures, apps: raw.apps))
+            parsed.append(.init(id: raw.id, name: raw.name, buzz: buzz, hosts: hosts, typing: raw.typing, pointer: raw.pointer, gestures: gestures, apps: raw.apps))
         }
         var menu: [String: ProfileAction] = [:]
         for member in self.menu.sortedUnique {
@@ -367,7 +416,7 @@ private struct RawFile {
             let scalars = Array(member.key.unicodeScalars)
             guard scalars.count == 1, let letter = scalars.first else { throw ProfileError(path, "a menu key is one letter or digit") }
             guard ("a"..."z").contains(letter) || ("0"..."9").contains(letter) else { throw ProfileError(path, "a menu key is a–z or 0–9") }
-            let action = try F.parseAction(member.value.string ?? "", ids: ids, path: path)
+            let action = try F.parseAction(member.value.string ?? "", ids: ids, path: path, buzzes: patterns)
             switch action {
             case .hold, .menu: throw ProfileError(path, "the menu can't hold a key or open itself")
             default: menu[member.key] = action
@@ -392,7 +441,18 @@ private struct RawFile {
         for member in self.start.sortedUnique where !["phone", "computer", "tv"].contains(member.key) {
             throw ProfileError("start.\(member.key)", "start is for phone, computer and tv")
         }
-        return ParsedProfileSet(name: name, profiles: parsed, menu: menu, start: start)
+        var resolved: [String: Pattern] = [:]
+        for member in feedback.sortedUnique {
+            let path = "feedback.\(member.key)"
+            guard BuzzFeedback.all.contains(where: { $0.name == member.key }) else {
+                throw ProfileError(path, "unknown moment (one of \(BuzzFeedback.all.map(\.name).joined(separator: ", ")))")
+            }
+            if member.value.string != "none" { resolved[member.key] = try F.findBuzz(member.value.string!, buzzes: patterns, path: path) }
+        }
+        for moment in BuzzFeedback.all where feedback[moment.name] == nil && moment.pattern != "none" {
+            resolved[moment.name] = try F.findBuzz(moment.pattern, buzzes: patterns, path: "feedback.\(moment.name)")
+        }
+        return ParsedProfileSet(name: name, profiles: parsed, menu: menu, start: start, buzzes: patterns, feedback: resolved)
     }
 }
 
@@ -414,10 +474,10 @@ extension ProfileFormat {
         "unknown host kind \"\(name)\" (one of \(ProfileHosts.allCases.map(\.rawValue).joined(separator: ", ")))"
     }
 
-    static func parseBinding(_ value: JSONValue, gesture: ProfileGesture, ids: [String], path: String) throws -> ParsedProfileSet.Binding {
+    static func parseBinding(_ value: JSONValue, gesture: ProfileGesture, ids: [String], path: String, buzzes: [String: Pattern] = [:]) throws -> ParsedProfileSet.Binding {
         func action(_ value: JSONValue, _ path: String) throws -> ProfileAction {
             guard let text = value.string else { throw ProfileError(path, "an action is a string, like \"media:playPause\"") }
-            let action = try parseAction(text, ids: ids, path: path)
+            let action = try parseAction(text, ids: ids, path: path, buzzes: buzzes)
             if case .hold = action, gesture != .middleHold {
                 throw ProfileError(path, "hold: only works on middle.hold (it's released with the finger)")
             }
@@ -432,6 +492,9 @@ extension ProfileFormat {
                 let path = "\(path).\(member.key)"
                 if member.key == "default" {
                     binding.defaultAction = try action(member.value, path)
+                } else if member.key == "buzz" {
+                    guard let name = member.value.string else { throw ProfileError(path, "a buzz is a pattern's name, like \"tick\"") }
+                    binding.buzz = try findBuzz(name, buzzes: buzzes, path: path)
                 } else {
                     guard let hosts = ProfileHosts(rawValue: member.key) else { throw ProfileError(path, unknownHosts(member.key)) }
                     binding.variants.append((hosts, try action(member.value, path)))
@@ -439,7 +502,7 @@ extension ProfileFormat {
             }
             return binding
         default:
-            throw ProfileError(path, "an action string, or an object of them by host kind (\"phone\", \"computer\", \"tv\", …, \"default\")")
+            throw ProfileError(path, "an action string, or an object of them by host kind (\"phone\", \"computer\", \"tv\", …, \"default\", and \"buzz\")")
         }
     }
 
@@ -451,7 +514,7 @@ extension ProfileFormat {
     }
 
     /// One action (PROFILES.md lists them). `ids` are the file's profile ids, for `profile:<id>`.
-    public static func parseAction(_ text: String, ids: [String], path: String) throws -> ProfileAction {
+    public static func parseAction(_ text: String, ids: [String], path: String, buzzes: [String: Pattern] = [:]) throws -> ProfileAction {
         func fail(_ message: String) -> ProfileError { ProfileError(path, message) }
         let (kind, arg) = splitOnce(text, UInt8(ascii: ":")) ?? (text, "")
         switch kind {
@@ -513,8 +576,12 @@ extension ProfileFormat {
                 }
                 return .host(.kind(hosts))
             }
+        case "buzz": return .buzz(try findBuzz(arg, buzzes: buzzes, path: path))
+        case "apps":
+            guard arg == "next" || arg == "previous" else { throw fail("unknown apps action \"\(arg)\" (apps:next, apps:previous)") }
+            return .apps(arg == "next")
         default:
-            throw fail("unknown action \"\(text)\" (none, menu, write, phoneMute, call:, media:, key:, hold:, type:, mouse:, profile:, host:)")
+            throw fail("unknown action \"\(text)\" (none, menu, write, phoneMute, call:, media:, key:, hold:, type:, mouse:, profile:, host:, buzz:, apps:)")
         }
     }
 
@@ -638,6 +705,8 @@ public struct GestureProfileSet: Equatable, Sendable {
     /// `phone`, `computer`, `tv` → profile id.
     public var start: [String: String]
     public var profiles: [GestureProfile]
+    public var buzzes: [String: String] = [:]
+    public var feedback: [String: String] = [:]
     /// Top-level fields this app doesn't know, in file order.
     public var extra: JSONObject
 
@@ -675,6 +744,8 @@ public struct GestureProfileSet: Equatable, Sendable {
                 guard let number = value.integer else { throw ProfileError("version", "a whole number") }
                 version = number
             case "name": name = try Self.string(value, member.key)
+            case "buzzes": buzzes = try Self.strings(value, member.key)
+            case "feedback": feedback = try Self.strings(value, member.key)
             case "menu": menu = try Self.strings(value, member.key)
             case "start": start = try Self.strings(value, member.key)
             case "profiles":
@@ -712,6 +783,9 @@ public struct GestureProfileSet: Equatable, Sendable {
         if !start.isEmpty {
             let keys = Self.startGroups.filter { start[$0] != nil } + start.keys.filter { !Self.startGroups.contains($0) }.sorted(by: JSONObject.byteOrder)
             object.append("start", .object(JSONObject(keys.map { .init($0, .string(start[$0]!)) })))
+        }
+        for (key, map) in [("buzzes", buzzes), ("feedback", feedback)] where !map.isEmpty {
+            object.append(key, .object(JSONObject(map.keys.sorted(by: JSONObject.byteOrder).map { .init($0, .string(map[$0]!)) })))
         }
         object.append("profiles", .array(profiles.map(\.json)))
         object.members += extra.members
@@ -762,6 +836,7 @@ public struct GestureProfile: Equatable, Sendable {
     public var id: String
     public var name: String
     /// 1–4; nil: not written (the dongle's default, 1).
+    public var buzzName: String? = nil
     public var buzz: Int?
     /// Empty: everyone.
     public var hosts: [String]
@@ -796,14 +871,16 @@ public struct GestureProfile: Equatable, Sendable {
     }
 
     public static func == (a: GestureProfile, b: GestureProfile) -> Bool {
-        a.id == b.id && a.name == b.name && a.buzz == b.buzz && a.hosts == b.hosts && a.typing == b.typing && a.pointer == b.pointer
+        a.id == b.id && a.name == b.name && a.buzzName == b.buzzName && a.buzz == b.buzz && a.hosts == b.hosts && a.typing == b.typing && a.pointer == b.pointer
             && a.gestures == b.gestures && a.apps == b.apps && a.description == b.description && a.symbol == b.symbol && a.color == b.color && a.extra == b.extra
     }
 
     /// The same profile under a new identity (for "Duplicate"), without its apps (an app belongs to one profile).
     public func copy(id: String, name: String) -> GestureProfile {
-        GestureProfile(id: id, name: name, buzz: buzz, hosts: hosts, typing: typing, pointer: pointer, gestures: gestures,
+        var copy = GestureProfile(id: id, name: name, buzz: buzz, hosts: hosts, typing: typing, pointer: pointer, gestures: gestures,
                        description: description, symbol: symbol, color: color, extra: extra)
+        copy.buzzName = buzzName
+        return copy
     }
 
     init(json: JSONValue, path: String) throws {
@@ -815,6 +892,8 @@ public struct GestureProfile: Equatable, Sendable {
             switch member.key {
             case "id": id = try GestureProfileSet.string(value, at)
             case "name": name = try GestureProfileSet.string(value, at)
+            case "buzz" where value.string != nil: buzzName = value.string
+            case "buzz" where value == .null: break
             case "buzz":
                 guard let count = value.integer, let small = Int(exactly: count) else { throw ProfileError(at, "1–4 buzzes") }
                 buzz = small
@@ -852,7 +931,7 @@ public struct GestureProfile: Equatable, Sendable {
         if let color { object.append("color", .string(color)) }
         if let description { object.append("description", .string(description)) }
         if !hosts.isEmpty { object.append("hosts", .array(hosts.map(JSONValue.string))) }
-        if let buzz { object.append("buzz", .integer(Int64(buzz))) }
+        if let buzzName { object.append("buzz", .string(buzzName)) } else if let buzz { object.append("buzz", .integer(Int64(buzz))) }
         if typing { object.append("typing", .bool(true)) }
         if pointer { object.append("pointer", .bool(true)) }
         if !apps.isEmpty { object.append("apps", .array(apps.map(JSONValue.string))) }
@@ -901,6 +980,16 @@ public enum GestureBinding: Equatable, Sendable {
         }
     }
 
+    public var buzz: String? {
+        get { if case .byHost(let map) = self { return map["buzz"] }; return nil }
+        set {
+            var map: [String: String]
+            switch self { case .action(let text): map = ["default": text]; case .byHost(let existing): map = existing }
+            map["buzz"] = newValue
+            self = .byHost(map)
+        }
+    }
+
     /// The action for every host (`default` of a by-host binding).
     public var defaultAction: String? {
         switch self {
@@ -925,7 +1014,7 @@ public enum GestureBinding: Equatable, Sendable {
     public var overrides: [String: String] {
         switch self {
         case .action: [:]
-        case .byHost(let map): map.filter { $0.key != "default" }
+        case .byHost(let map): map.filter { $0.key != "default" && $0.key != "buzz" }
         }
     }
 

@@ -190,6 +190,8 @@ pub mod keys {
     pub const ENTER: u8 = 0x28;
     pub const BACKSPACE: u8 = 0x2A;
     pub const SPACE: u8 = 0x2C;
+    pub const ALT: u8 = 0x04;
+    pub const TAB: u8 = 0x2B;
 
     /// A typed character on a US layout: (modifiers, usage).
     pub fn for_char(c: char) -> Option<(u8, u8)> {
@@ -261,8 +263,10 @@ struct State {
     pairing: Option<(Kind, Instant)>,
     /// The active host changed (the band buzzes: once for a phone, twice for a computer).
     switched: Option<Kind>,
-    /// The active host's profile changed: that profile's buzz count.
-    profile_switched: Option<u8>,
+    /// The active host's profile changed: that profile's buzz pattern.
+    profile_switched: Option<np_profiles::Pattern>,
+    /// Patterns asked for over the control service (`buzz <name>`, `buzz try <pattern>`).
+    patterns: std::collections::VecDeque<np_profiles::Pattern>,
     /// Something on a computer wants you (`buzz`): its pattern, for the band.
     /// Alerts not yet buzzed, oldest first (a few: they can come close together).
     alerts: std::collections::VecDeque<Alert>,
@@ -417,7 +421,7 @@ impl Remote {
             // Plugging the dongle in (into the laptop, usually) opens a window for pairing a computer.
             state: std::sync::Mutex::new(State {
                 hosts: Vec::new(), known, active: None, preferred, legacy_mode,
-                pairing: Some((Kind::Mac, Instant::now())), switched: None, profile_switched: None, alerts: Default::default(), generation: 0, held: None,
+                pairing: Some((Kind::Mac, Instant::now())), switched: None, profile_switched: None, patterns: Default::default(), alerts: Default::default(), generation: 0, held: None,
                 unreadable,
             }),
             nvs: std::sync::Mutex::new(nvs),
@@ -683,7 +687,7 @@ impl Remote {
         host.home = None;
         let (addr, name) = (host.addr, host.name.clone());
         if let Some(i) = addr.and_then(|addr| state.known_index(addr)) { state.known[i].profile = profile.id.clone(); }
-        if active { state.profile_switched = Some(profile.buzz); }
+        if active { state.profile_switched = Some(profile.buzz.clone()); }
         state.generation += 1;
         drop(state);
         self.save_known();
@@ -724,7 +728,15 @@ impl Remote {
         Ok(())
     }
 
-    pub fn take_profile_switched(&self) -> Option<u8> { self.0.state.lock().unwrap().profile_switched.take() }
+    pub fn take_profile_switched(&self) -> Option<np_profiles::Pattern> { self.0.state.lock().unwrap().profile_switched.take() }
+
+    /// The band plays this pattern (`Controller::poll`).
+    pub fn play(&self, pattern: np_profiles::Pattern) {
+        let mut state = self.0.state.lock().unwrap();
+        if state.patterns.len() < 4 { state.patterns.push_back(pattern); }
+    }
+
+    pub fn take_play(&self) -> Option<np_profiles::Pattern> { self.0.state.lock().unwrap().patterns.pop_front() }
 
     /// A new profile set: every host goes back to the profile it chose, if the set still has it.
     pub fn profiles_changed(&self) {

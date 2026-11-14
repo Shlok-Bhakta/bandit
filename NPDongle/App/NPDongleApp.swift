@@ -26,7 +26,7 @@ struct RootView: View {
             NavigationStack { HomeView() }
                 .tabItem { Label("Dongle", systemImage: "cable.connector") }
                 .tag(DongleModel.Tab.home)
-            NavigationStack { ProfilesView() }
+            NavigationStack { profilesRoot }
                 .tabItem { Label("Profiles", systemImage: "hand.raised.fingers.spread") }
                 .tag(DongleModel.Tab.profiles)
             NavigationStack { PairingView() }
@@ -50,4 +50,23 @@ struct RootView: View {
             NavigationStack { ImportReviewView(candidate: candidate) }
         }
     }
+    /// Direct routes for simulator layout checks, alongside the existing -NPTab launch option.
+    @ViewBuilder private var profilesRoot: some View {
+        #if DEBUG
+        switch UserDefaults.standard.string(forKey: "NPScreen") {
+        case "buzzes": BuzzesView()
+        case "designer": BuzzDesignerView(name: "rise", initial: model.store.set.patternText("rise"))
+        case "feedback": FeedbackView()
+        case "lab": GestureLabView()
+        case "editor":
+            if let profile = model.store.set.profiles.first { ProfileEditorView(uid: profile.uid) }
+        case "band":
+            if let profile = model.store.set.profiles.first { BandEventsView(uid: profile.uid) }
+        default: ProfilesView()
+        }
+        #else
+        ProfilesView()
+        #endif
+    }
+
 }

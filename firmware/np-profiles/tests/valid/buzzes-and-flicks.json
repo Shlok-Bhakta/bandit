@@ -1,0 +1,52 @@
+{
+  "format": "np-profiles",
+  "version": 1,
+  "name": "Buzzes, flicks and band events",
+  "buzzes": {
+    "zap": "40*100 _60 40*100",
+    "done": "120 _80 120 _80 300*95",
+    "slow": "2000*10"
+  },
+  "feedback": {
+    "alert.question": "zap",
+    "connected": "none",
+    "gesture": "tick",
+    "call.ringing": "heartbeat"
+  },
+  "menu": { "z": "buzz:zap" },
+  "profiles": [
+    {
+      "id": "car",
+      "name": "Car",
+      "buzz": "rise",
+      "gestures": {
+        "flick.up": { "phone": "media:volumeUp", "buzz": "nudge" },
+        "flick.down": "media:volumeDown",
+        "flick.left": { "default": "media:previous", "buzz": "zap" },
+        "flick.right": "media:next",
+        "band.thumb.swipeIn": "buzz:done",
+        "band.wake": "none",
+        "band.index.partialPress": "buzz:tick",
+        "band.middle.buttonHoldRelease": "media:playPause"
+      }
+    },
+    {
+      "id": "desk",
+      "name": "Desk",
+      "hosts": ["computer"],
+      "buzz": 3,
+      "pointer": true,
+      "gestures": {
+        "flick.right": "apps:next",
+        "flick.left": "apps:previous",
+        "index.doubleTap": "mouse:click"
+      }
+    },
+    {
+      "id": "plain",
+      "name": "Plain",
+      "buzz": null,
+      "gestures": { "flick.up": "apps:next" }
+    }
+  ]
+}

@@ -17,7 +17,7 @@ struct ActionContext {
 
 /// The kinds of action the editor offers, read from and written to the action string.
 enum ActionKind: String, CaseIterable, Identifiable {
-    case unset, none, media, phoneMute, call, mouse, profile, host, menu, write, key, hold, type, custom
+    case unset, none, media, phoneMute, call, mouse, profile, host, menu, write, key, hold, type, buzz, apps, custom
 
     var id: String { rawValue }
 
@@ -36,6 +36,8 @@ enum ActionKind: String, CaseIterable, Identifiable {
         case .key: "Key…"
         case .hold: "Hold key…"
         case .type: "Type text…"
+        case .buzz: "Play buzz"
+        case .apps: "Switch app"
         case .custom: "Written by hand…"
         }
     }
@@ -55,6 +57,8 @@ enum ActionKind: String, CaseIterable, Identifiable {
         case .key: "keyboard"
         case .hold: "keyboard.badge.ellipsis"
         case .type: "text.cursor"
+        case .buzz: "waveform"
+        case .apps: "rectangle.on.rectangle"
         case .custom: "chevron.left.forwardslash.chevron.right"
         }
     }
@@ -75,6 +79,8 @@ enum ActionKind: String, CaseIterable, Identifiable {
         case "key": self = .key
         case "hold": self = .hold
         case "type": self = .type
+        case "buzz": self = .buzz
+        case "apps": self = .apps
         default: self = .custom
         }
     }
@@ -95,6 +101,8 @@ enum ActionKind: String, CaseIterable, Identifiable {
         case .key: "key:enter"
         case .hold: "hold:alt+space"
         case .type: "type:Hello"
+        case .buzz: "buzz:tick"
+        case .apps: "apps:next"
         case .custom: current ?? "none"
         }
     }
@@ -126,6 +134,8 @@ enum ActionKind: String, CaseIterable, Identifiable {
         case .key: return "Key \(arg)"
         case .hold: return "Hold \(arg)"
         case .type: return "Type “\(arg)”"
+        case .buzz: return "Buzz: \(arg)"
+        case .apps: return arg == "previous" ? "Previous app" : "Next app"
         case .mouse, .custom: return action
         }
     }
@@ -133,6 +143,7 @@ enum ActionKind: String, CaseIterable, Identifiable {
 
 /// Edits one action string: pick a kind, then its details, with the dongle's verdict underneath.
 struct ActionEditor: View {
+    @Environment(DongleModel.self) private var model
     @Binding var action: String?
     let context: ActionContext
 
@@ -188,6 +199,16 @@ struct ActionEditor: View {
             }
             Text("On an iPhone that shares its notifications with the dongle (it asks once). A ringing call buzzes the band; with no call, a long buzz.")
                 .font(.caption).foregroundStyle(.secondary)
+        case .buzz:
+            Picker("Pattern", selection: argument) {
+                ForEach(model.store.set.buzzNames, id: \.self) { Text($0).tag($0) }
+            }
+        case .apps:
+            Picker("Direction", selection: argument) {
+                Text("Next app").tag("next")
+                Text("Previous app").tag("previous")
+            }
+            Text("Computers only. Best on flicks: keep pinching to browse apps, then release to choose. Requires firmware 0.15.0.").font(.caption).foregroundStyle(.secondary)
         case .mouse:
             MouseEditor(argument: argument)
         case .profile:
@@ -235,6 +256,7 @@ struct ActionEditor: View {
 struct VerdictRow: View {
     let action: String
     let context: ActionContext
+    @Environment(DongleModel.self) private var model
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
@@ -251,7 +273,7 @@ struct VerdictRow: View {
 
     private var problem: String? {
         do {
-            let parsed = try ProfileFormat.parseAction(action, ids: context.ids, path: context.path)
+            let parsed = try ProfileFormat.parseAction(action, ids: context.ids, path: context.path, buzzes: model.store.set.buzzes.compactMapValues { try? ProfileFormat.parsePattern($0) })
             switch parsed {
             case .hold where !context.allowsHold && context.allowsMenu:
                 return "hold: only works on middle.hold (it's released with the finger)"

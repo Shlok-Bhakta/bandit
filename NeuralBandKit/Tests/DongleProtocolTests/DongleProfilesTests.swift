@@ -159,13 +159,19 @@ enum ProfileVectors {
     }
 
     @Test func typeErrorsAreTheWholeFile() throws {
-        for text in [#"{"format":"np-profiles","version":1,"profiles":[{"id":"a","name":"A","buzz":300}]}"#,
-                     #"{"format":"np-profiles","version":1.0,"profiles":[{"id":"a","name":"A"}]}"#,
+        for text in [#"{"format":"np-profiles","version":1.0,"profiles":[{"id":"a","name":"A"}]}"#,
                      #"{"format":"np-profiles","version":1,"name":null,"profiles":[{"id":"a","name":"A"}]}"#,
                      #"{"format":"np-profiles","version":1,"profiles":[{"id":"a"}]}"#,
                      #"[1]"#, "not json", #"{"format":"np-profiles","version":1,"profiles":[]} x"#] {
             let error = try #require(ProfileFormat.validate(Data(text.utf8)), "\(text)")
             #expect(error.path == "", "\(text): \(error)")
+        }
+    }
+
+    @Test func numericBuzzErrorsHaveAFieldPath() {
+        for value in ["0", "5", "300", "-1", "1.5", "1.0"] {
+            let data = Data("{\"format\":\"np-profiles\",\"version\":1,\"profiles\":[{\"id\":\"a\",\"name\":\"A\",\"buzz\":\(value)}]}".utf8)
+            #expect(ProfileFormat.validate(data) == ProfileError("profiles[0].buzz", "1–4 buzzes"))
         }
     }
 
@@ -309,5 +315,66 @@ enum ProfileVectors {
     @Test func olderFirmwareHasNoProfiles() throws {
         let status = try DongleStatus.decode(Data(#"{"mode":"slides","pe":""}"#.utf8))
         #expect(status.profileHash == nil && status.profileError == nil && !status.supportsProfiles)
+    }
+}
+
+@Suite struct BuzzAndLabTests {
+    @Test func catalogCoversEveryBandEvent() throws {
+        #expect(ProfileGesture.named.count == 18)
+        #expect(ProfileGesture.band.count == 120)
+        #expect(Set(ProfileGesture.allCases).count == 138)
+        for gesture in ProfileGesture.allCases {
+            #expect(ProfileGesture(rawValue: gesture.rawValue) == gesture)
+            var set = GestureProfileSet(profiles: [GestureProfile(id: "a", name: "A")])
+            set.profiles[0][gesture] = .action("apps:next")
+            #expect(set.validate() == nil)
+            #expect(try GestureProfileSet.decode(set.minifiedData).profiles[0][gesture] == .action("apps:next"))
+        }
+        for name in ["band.unknown", "band.ring.click", "band.thumb.click.extra", "flick.diagonal"] { #expect(ProfileGesture(rawValue: name) == nil) }
+    }
+    @Test func patternsFollowTheFirmwareGrammar() throws {
+        let pattern = try ProfileFormat.parsePattern("250 _200 250*90")
+        #expect(pattern.duration == 700)
+        #expect(pattern.pulses.map(\.atMS) == [0, 450])
+        #expect(pattern.pulses.map(\.strength) == [70, 90])
+        for builtin in ProfileFormat.builtinBuzzes { #expect(try ProfileFormat.parsePattern(builtin.text).duration > 0) }
+        for (text, message) in [
+            ("_20 30", "a pause goes between two pulses"),
+            ("20 _20", "a pattern ends with a pulse"),
+            ("20 _20 _20 20", "a pause goes between two pulses"),
+            ("19", "a pulse is 20–2000 ms"),
+            ("20*0", "strength is 1–100"),
+            ("20 _3001 20", "a pause is 20–3000 ms"),
+            ("2000 2000 2000 2000 20", "a pattern lasts at most 8000 ms")
+        ] {
+            do { _ = try ProfileFormat.parsePattern(text); Issue.record("Accepted \(text)") }
+            catch let error as ProfileError { #expect(error.message == message) }
+        }
+    }
+    @Test func redefinedPatternsResolveEverywhereAndRoundTrip() throws {
+        let data = Data(#"{"format":"np-profiles","version":1,"custom":{"keep":true},"buzzes":{"tap":"80*22","zap":"50 _100 80*90"},"feedback":{"connected":"none","gesture":"zap"},"profiles":[{"id":"a","name":"A","buzz":"zap","gestures":{"flick.up":{"default":"buzz:zap","buzz":"tap"},"band.thumb.click":"apps:previous"}}]}"#.utf8)
+        let editable = try GestureProfileSet.decode(data)
+        let parsed = try editable.parsed()
+        #expect(parsed.feedback["connected"] == nil)
+        #expect(parsed.profiles[0].buzz == parsed.buzzes["zap"])
+        #expect(parsed.profiles[0].gestures[.flickUp]?.buzz == parsed.buzzes["tap"])
+        #expect(parsed.profiles[0].gestures[.flickUp]?.defaultAction == .buzz(parsed.buzzes["zap"]!))
+        #expect(editable.profiles[0].copy(id: "b", name: "B").buzzName == "zap")
+        #expect(try GestureProfileSet.decode(editable.minifiedData) == editable)
+        #expect(editable.extra["custom"] != nil)
+        #expect(DongleCommand.buzz("tap").text == "buzz tap")
+        #expect(DongleCommand.buzzTry("50 _100 80*90").text == "buzz try 50 _100 80*90")
+        #expect(DongleCommand.lab(true).text == "lab on")
+    }
+    @Test func logRecordsKeepUnknownValuesAndMapEvents() {
+        #expect(GestureLabRecord.parse("12.345 I gesture #812: index tap singleTap") == .message(sequence: 812, finger: "index", action: "tap", derived: "singleTap"))
+        #expect(GestureLabRecord.parse("1.000 I gesture #9: unknown unrecognized:42 notApplicable") == .message(sequence: 9, finger: "unknown", action: "unrecognized:42", derived: "notApplicable"))
+        #expect(GestureLabRecord.parse("1 I LAB flick up 220 °/s") == .motion(flick: true, direction: "up", peak: "220 °/s"))
+        #expect(GestureLabRecord.parse("1 I LAB swing left 100 °/s") == .motion(flick: false, direction: "left", peak: "100 °/s"))
+        #expect(GestureLabRecord.parse("1 I GESTURE: flick.up in media: Apps(true)") == .fired(gesture: "flick.up", profile: "media", action: "Apps(true)"))
+        #expect(GestureLabRecord.parse("1 I LAB fields thumb right buttonRight: pressure: 4") == .fields("thumb right buttonRight: pressure: 4"))
+        #expect(GestureLabRecord.bandNames(finger: "thumb", action: "click", derived: "click") == ["band.thumb.click", "band.click"])
+        #expect(GestureLabRecord.bandNames(finger: "unknown", action: "click", derived: "notApplicable") == ["band.click"])
+        #expect(GestureLabRecord.parse("not a gesture") == nil)
     }
 }

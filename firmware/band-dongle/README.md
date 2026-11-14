@@ -118,6 +118,12 @@ and `tv`, which do what the modes below always did.
   [np-appwatch](https://github.com/Shlok-Bhakta/homebrew-np) on a Mac (`brew install
   shlok-bhakta/np/np-appwatch`), a profile's `apps` (bundle ids) switch that Mac to it while one of
   them is in front, and any other app switches it back.
+- **Every gesture, flicks and buzz patterns (v0.15):** profiles can bind `flick.up/down/left/right`
+  (pinch, hold, flick the wrist: repeatable within one pinch, so `apps:next` on a flick walks the
+  ⌘Tab switcher) and any raw band event (`band.thumb.swipeIn`, `band.index.click`, …). Every buzz
+  is a pattern: the set's `buzzes` define them, `feedback` says which one each moment plays (an
+  alert, a ringing call, a host switch …), a binding may have its own, and `buzz:<name>` plays one.
+  `lab on` logs everything the band says, for the app's Gesture lab ([PROFILES.md](../np-profiles/PROFILES.md)).
 - **Phone calls on an iPhone (v0.14):** the dongle reads the iPhone's notifications (Apple's ANCS,
   the way a watch does), so a ringing call buzzes the band (two long pulses every 3 s) and
   `call:answer` / `call:end` answer, decline or hang up. iOS asks once to share notifications.

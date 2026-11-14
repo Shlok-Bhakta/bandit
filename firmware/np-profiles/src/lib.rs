@@ -67,6 +67,47 @@ impl Hosts {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Finger { Index, Middle }
 
+/// The fingers the band names in its gesture messages.
+pub const BAND_FINGERS: [&str; 3] = ["thumb", "index", "middle"];
+/// Everything the band's gesture messages can say: its `action` table, then its `derived` one
+/// (band-core's session.rs). A `band.` gesture fires when a message says this in either field.
+pub const BAND_EVENTS: [&str; 30] = [
+    "press", "release", "tap", "doubletap", "click", "up", "down", "left", "right", "wake",
+    "swipeIn", "swipeOut", "ia", "partialPress", "partialRelease", "partialClick", "partialUp",
+    "partialDown", "partialLeft", "partialRight",
+    "singleTap", "doubleTap", "buttonHold", "buttonRelease", "buttonUp", "buttonDown", "buttonLeft",
+    "buttonRight", "buttonPress", "buttonHoldRelease",
+];
+
+/// One raw band event: `band.<event>` (any finger) or `band.<finger>.<event>`. Indexes into
+/// [`BAND_FINGERS`] and [`BAND_EVENTS`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BandEvent { pub finger: Option<u8>, pub event: u8 }
+
+impl BandEvent {
+    pub fn event_name(self) -> &'static str { BAND_EVENTS[self.event as usize] }
+    pub fn finger_name(self) -> Option<&'static str> { self.finger.map(|f| BAND_FINGERS[f as usize]) }
+
+    /// Whether a band message (its finger, action and derived action) is this event.
+    pub fn matches(self, finger: &str, action: &str, derived: &str) -> bool {
+        self.finger_name().is_none_or(|f| f == finger) && (action == self.event_name() || derived == self.event_name())
+    }
+
+    /// Every event a message is, most specific first: `band.<finger>.<event>`, then `band.<event>`.
+    pub fn of_message(finger: &str, action: &str, derived: &str) -> Vec<BandEvent> {
+        let finger = BAND_FINGERS.iter().position(|f| *f == finger).map(|f| f as u8);
+        let mut events = Vec::new();
+        for name in [action, derived] {
+            let Some(event) = BAND_EVENTS.iter().position(|e| *e == name).map(|e| e as u8) else { continue };
+            if events.iter().any(|e: &BandEvent| e.event == event) { continue; }
+            if finger.is_some() { events.push(BandEvent { finger, event }); }
+            events.push(BandEvent { finger: None, event });
+        }
+        events.sort_by_key(|e| e.finger.is_none());
+        events
+    }
+}
+
 /// Everything a profile can bind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Gesture {
@@ -79,17 +120,33 @@ pub enum Gesture {
     SwipeUp, SwipeDown, SwipeLeft, SwipeRight,
     /// Pinch and turn the wrist, one detent clockwise / anticlockwise (as seen looking at the back of the hand).
     DialCw, DialCcw,
+    /// Pinch, hold and flick the wrist (the way the air mouse would go), during the hold: as often as you flick.
+    FlickUp, FlickDown, FlickLeft, FlickRight,
+    /// What the band itself said, as it said it (`band.index.click`).
+    Band(BandEvent),
 }
 
 impl Gesture {
-    pub const ALL: [Gesture; 14] = [
+    /// The named gestures (not `band.` ones).
+    pub const ALL: [Gesture; 18] = [
         Gesture::IndexTap, Gesture::IndexDoubleTap, Gesture::IndexTripleTap, Gesture::IndexHold,
         Gesture::MiddleTap, Gesture::MiddleDoubleTap, Gesture::MiddleTripleTap, Gesture::MiddleHold,
         Gesture::SwipeUp, Gesture::SwipeDown, Gesture::SwipeLeft, Gesture::SwipeRight,
         Gesture::DialCw, Gesture::DialCcw,
+        Gesture::FlickUp, Gesture::FlickDown, Gesture::FlickLeft, Gesture::FlickRight,
     ];
 
-    pub fn name(self) -> &'static str {
+    pub fn name(self) -> String {
+        match self {
+            Gesture::Band(band) => match band.finger_name() {
+                Some(finger) => format!("band.{finger}.{}", band.event_name()),
+                None => format!("band.{}", band.event_name()),
+            },
+            named => named.fixed_name().to_string(),
+        }
+    }
+
+    fn fixed_name(self) -> &'static str {
         match self {
             Gesture::IndexTap => "index.tap", Gesture::IndexDoubleTap => "index.doubleTap",
             Gesture::IndexTripleTap => "index.tripleTap", Gesture::IndexHold => "index.hold",
@@ -98,10 +155,25 @@ impl Gesture {
             Gesture::SwipeUp => "swipe.up", Gesture::SwipeDown => "swipe.down",
             Gesture::SwipeLeft => "swipe.left", Gesture::SwipeRight => "swipe.right",
             Gesture::DialCw => "dial.cw", Gesture::DialCcw => "dial.ccw",
+            Gesture::FlickUp => "flick.up", Gesture::FlickDown => "flick.down",
+            Gesture::FlickLeft => "flick.left", Gesture::FlickRight => "flick.right",
+            Gesture::Band(_) => "band",
         }
     }
 
-    pub fn from_name(name: &str) -> Option<Gesture> { Gesture::ALL.into_iter().find(|g| g.name() == name) }
+    pub fn from_name(name: &str) -> Option<Gesture> {
+        if let Some(rest) = name.strip_prefix("band.") {
+            let (finger, event) = match rest.split_once('.') {
+                Some((finger, event)) => (Some(BAND_FINGERS.iter().position(|f| *f == finger)? as u8), event),
+                None => (None, rest),
+            };
+            let event = BAND_EVENTS.iter().position(|e| *e == event)? as u8;
+            return Some(Gesture::Band(BandEvent { finger, event }));
+        }
+        Gesture::ALL.into_iter().find(|g| g.fixed_name() == name)
+    }
+
+    pub fn is_flick(self) -> bool { matches!(self, Gesture::FlickUp | Gesture::FlickDown | Gesture::FlickLeft | Gesture::FlickRight) }
 
     /// A finger's tap count as a gesture (1–3).
     pub fn taps(finger: Finger, count: u8) -> Option<Gesture> {
@@ -121,6 +193,130 @@ impl Gesture {
             _ => return None,
         })
     }
+}
+
+/// One step of a buzz pattern: a vibration starting `at_ms` after the pattern starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pulse {
+    pub at_ms: u16,
+    pub ms: u16,
+    /// 1–100 (%).
+    pub strength: u8,
+}
+
+impl Pulse {
+    /// The band's vibration amplitude (0–255).
+    pub fn amplitude(self) -> u8 { ((u16::from(self.strength) * 255 + 50) / 100) as u8 }
+}
+
+/// A buzz pattern: its pulses, in order.
+pub type Pattern = Vec<Pulse>;
+
+pub const MAX_BUZZES: usize = 16;
+pub const PATTERN_MAX_STEPS: usize = 16;
+pub const PATTERN_MAX_MS: u32 = 8000;
+/// A pulse's strength when the pattern doesn't say (`250` is `250*70`).
+pub const DEFAULT_STRENGTH: u8 = 70;
+
+/// The buzz patterns every set has. A set's `buzzes` may redefine any of them.
+pub const BUILTIN_BUZZES: [(&str, &str); 14] = [
+    ("tick", "40*55"),
+    ("tap", "60*63"),
+    ("double", "60*63 _190 60*63"),
+    ("triple", "60*63 _190 60*63 _190 60*63"),
+    ("quad", "60*63 _190 60*63 _190 60*63 _190 60*63"),
+    ("long", "400*78"),
+    ("done", "250*78 _200 250*78"),
+    ("question", "70*67 _130 70*67 _130 380*86"),
+    ("error", "900*90"),
+    ("ring", "600*90 _300 600*90"),
+    ("heartbeat", "90*85 _110 70*45"),
+    ("rise", "60*30 _90 60*55 _90 60*80 _90 80*100"),
+    ("fall", "80*100 _90 60*80 _90 60*55 _90 60*30"),
+    ("nudge", "30*50"),
+];
+
+/// `250 _200 250*90`: pulses (ms, or ms*strength 1–100) and pauses (`_ms`), starting and ending
+/// with a pulse.
+pub fn parse_pattern(text: &str) -> Result<Pattern, String> {
+    const HOW: &str = "a pattern is pulses (ms, or ms*strength 1–100) and pauses (_ms), like \"250 _200 250*90\"";
+    if text.len() > 120 { return Err("a pattern is at most 120 characters".into()); }
+    let tokens: Vec<&str> = text.split_ascii_whitespace().collect();
+    if tokens.is_empty() { return Err(HOW.into()); }
+    if tokens.len() > PATTERN_MAX_STEPS { return Err(format!("at most {PATTERN_MAX_STEPS} pulses and pauses")); }
+    let mut pulses = Vec::new();
+    let mut at: u32 = 0;
+    let mut last_pause = false;
+    for (i, token) in tokens.iter().enumerate() {
+        let number = |text: &str| text.parse::<u32>().ok().filter(|_| !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()));
+        if let Some(pause) = token.strip_prefix('_') {
+            let ms = number(pause).ok_or_else(|| HOW.to_string())?;
+            if !(20..=3000).contains(&ms) { return Err("a pause is 20–3000 ms".into()); }
+            if i == 0 || last_pause { return Err("a pause goes between two pulses".into()); }
+            at += ms;
+            last_pause = true;
+        } else {
+            let (ms, strength) = match token.split_once('*') {
+                Some((ms, strength)) => (number(ms), number(strength).filter(|s| (1..=100).contains(s)).ok_or("strength is 1–100")?),
+                None => (number(token), u32::from(DEFAULT_STRENGTH)),
+            };
+            let ms = ms.ok_or_else(|| HOW.to_string())?;
+            if !(20..=2000).contains(&ms) { return Err("a pulse is 20–2000 ms".into()); }
+            pulses.push(Pulse { at_ms: at as u16, ms: ms as u16, strength: strength as u8 });
+            at += ms;
+            last_pause = false;
+        }
+        if at > PATTERN_MAX_MS { return Err(format!("a pattern lasts at most {PATTERN_MAX_MS} ms")); }
+    }
+    if last_pause { return Err("a pattern ends with a pulse".into()); }
+    Ok(pulses)
+}
+
+/// How long a pattern lasts (ms).
+pub fn pattern_ms(pattern: &[Pulse]) -> u32 { pattern.last().map_or(0, |p| u32::from(p.at_ms) + u32::from(p.ms)) }
+
+/// The moments the band buzzes for by itself, each with a pattern a set's `feedback` may change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Feedback {
+    /// The band connected to the dongle.
+    Connected,
+    /// Something didn't work: no such profile here, no host to switch to, a letter the menu doesn't know.
+    Refused,
+    /// Gestures now go to a phone / a computer or TV.
+    HostPhone, HostComputer,
+    /// A computer's helper (np-appwatch): an agent finished, asks something, failed.
+    AlertDone, AlertQuestion, AlertError,
+    /// An iPhone call ringing (again every 3 s).
+    CallRinging,
+    /// Handwriting on (write now) / off.
+    WriteOn, WriteOff,
+    /// The letter menu is ready for its letter.
+    MenuReady,
+    /// `middle.hold` started (speak now).
+    HoldStart,
+    /// Any gesture that ran an action (none by default; a binding's own `buzz` beats it).
+    Gesture,
+}
+
+impl Feedback {
+    pub const ALL: [(Feedback, &'static str, &'static str); 13] = [
+        (Feedback::Connected, "connected", "tap"),
+        (Feedback::Refused, "refused", "long"),
+        (Feedback::HostPhone, "host.phone", "tap"),
+        (Feedback::HostComputer, "host.computer", "double"),
+        (Feedback::AlertDone, "alert.done", "done"),
+        (Feedback::AlertQuestion, "alert.question", "question"),
+        (Feedback::AlertError, "alert.error", "error"),
+        (Feedback::CallRinging, "call.ringing", "ring"),
+        (Feedback::WriteOn, "write.on", "double"),
+        (Feedback::WriteOff, "write.off", "tap"),
+        (Feedback::MenuReady, "menu.ready", "double"),
+        (Feedback::HoldStart, "hold.start", "tick"),
+        (Feedback::Gesture, "gesture", "none"),
+    ];
+
+    pub fn name(self) -> &'static str { Self::ALL.iter().find(|(f, ..)| *f == self).map(|(_, n, _)| *n).unwrap_or("") }
+    pub fn from_name(name: &str) -> Option<Feedback> { Self::ALL.iter().find(|(_, n, _)| *n == name).map(|(f, ..)| *f) }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -186,6 +382,12 @@ pub enum Action {
     Menu,
     /// Handwriting on, typed on the host, until nothing is written for this many seconds.
     Write(u8),
+    /// Plays a buzz pattern.
+    Buzz(Pattern),
+    /// The computer's app switcher: ⌘Tab (Alt+Tab on Windows and Linux), or with Shift
+    /// (`false`). In a pinch hold (a flick) ⌘ stays down until the pinch lets go, so flicking again
+    /// moves on through the apps.
+    Apps(bool),
 }
 
 /// What one gesture does: a default, and variants for kinds of host.
@@ -193,6 +395,8 @@ pub enum Action {
 pub struct Binding {
     pub default: Option<Action>,
     pub variants: Vec<(Hosts, Action)>,
+    /// Played when its action runs (`"buzz": "tick"`), instead of the set's `feedback.gesture`.
+    pub buzz: Option<Pattern>,
 }
 
 impl Binding {
@@ -208,8 +412,8 @@ impl Binding {
 pub struct Profile {
     pub id: String,
     pub name: String,
-    /// Short buzzes when switching to it (1–4), so you can tell where you landed.
-    pub buzz: u8,
+    /// Played when switching to it (1–4 short buzzes, or a pattern), so you can tell where you landed.
+    pub buzz: Pattern,
     /// Who may use it (empty: everyone).
     pub hosts: Vec<Hosts>,
     /// The band's handwriting is typed (computers).
@@ -236,10 +440,23 @@ impl Profile {
             .map(|(n, _)| n).max().unwrap_or(0)
     }
 
-    /// Whether a pinch hold needs wrist motion here (the pointer, or a bound dial).
+    /// Whether a pinch hold needs wrist motion here (the pointer, a bound dial or flicks).
     pub fn uses_motion(&self, kind: HostKind) -> bool {
-        (self.pointer && kind.is_computer()) || self.action(Gesture::DialCw, kind).is_some() || self.action(Gesture::DialCcw, kind).is_some()
+        self.points(kind) || [Gesture::DialCw, Gesture::DialCcw].into_iter().any(|g| self.action(g, kind).is_some()) || self.flicks(kind)
     }
+
+    /// Whether flicks are bound here (a `pointer` profile on a computer has none: the pinch moves the pointer).
+    pub fn flicks(&self, kind: HostKind) -> bool {
+        !self.points(kind) && [Gesture::FlickUp, Gesture::FlickDown, Gesture::FlickLeft, Gesture::FlickRight].into_iter().any(|g| self.action(g, kind).is_some())
+    }
+
+    /// The `band.` gestures bound here, for matching the band's messages.
+    pub fn band_events(&self) -> impl Iterator<Item = BandEvent> + '_ {
+        self.gestures.keys().filter_map(|g| match g { Gesture::Band(b) => Some(*b), _ => None })
+    }
+
+    /// The pattern a gesture's binding plays when its action runs, if it has its own.
+    pub fn buzz(&self, gesture: Gesture) -> Option<&Pattern> { self.gestures.get(&gesture).and_then(|b| b.buzz.as_ref()) }
 
     pub fn types(&self, kind: HostKind) -> bool { self.typing && kind.is_computer() }
     pub fn points(&self, kind: HostKind) -> bool { self.pointer && kind.is_computer() }
@@ -253,12 +470,22 @@ pub struct ProfileSet {
     pub menu: BTreeMap<char, Action>,
     /// The profile a host starts with, by kind: phone, computer, tv.
     pub start: [usize; 3],
+    /// The file's own buzz patterns, by name (the built-in ones are in [`BUILTIN_BUZZES`]).
+    pub buzzes: BTreeMap<String, Pattern>,
+    /// What the band buzzes by itself, resolved (None: silent).
+    pub feedback: BTreeMap<Feedback, Option<Pattern>>,
 }
 
 impl ProfileSet {
     pub fn builtin() -> ProfileSet { ProfileSet::parse(DEFAULT_JSON).expect("the built-in profiles are valid") }
 
     pub fn index_of(&self, id: &str) -> Option<usize> { self.profiles.iter().position(|p| p.id == id) }
+
+    /// The pattern for one of the band's own moments (None: silent).
+    pub fn feedback(&self, moment: Feedback) -> Option<&Pattern> { self.feedback.get(&moment).and_then(Option::as_ref) }
+
+    /// A pattern by name: the file's, else a built-in one.
+    pub fn pattern(&self, name: &str) -> Option<Pattern> { find_buzz(name, &self.buzzes) }
 
     /// The profile that lists `app` (ignoring case), if this kind of host may use it.
     pub fn for_app(&self, app: &str, kind: HostKind) -> Option<usize> {
@@ -312,6 +539,10 @@ struct RawFile {
     menu: BTreeMap<String, String>,
     #[serde(default)]
     start: BTreeMap<String, String>,
+    #[serde(default)]
+    buzzes: BTreeMap<String, String>,
+    #[serde(default)]
+    feedback: BTreeMap<String, String>,
     profiles: Vec<RawProfile>,
 }
 
@@ -319,8 +550,9 @@ struct RawFile {
 struct RawProfile {
     id: String,
     name: String,
-    #[serde(default = "one")]
-    buzz: u8,
+    /// 1–4, or a pattern's name (missing or null: 1).
+    #[serde(default)]
+    buzz: Value,
     #[serde(default)]
     hosts: Vec<String>,
     #[serde(default)]
@@ -333,8 +565,6 @@ struct RawProfile {
     apps: Vec<String>,
 }
 
-fn one() -> u8 { 1 }
-
 impl RawFile {
     fn check(self) -> Result<ProfileSet, Error> {
         if self.format != FORMAT { return Err(Error::new("format", format!("must be \"{FORMAT}\""))); }
@@ -343,7 +573,16 @@ impl RawFile {
         if self.profiles.is_empty() || self.profiles.len() > MAX_PROFILES {
             return Err(Error::new("profiles", format!("1 to {MAX_PROFILES} profiles")));
         }
+        if self.buzzes.len() > MAX_BUZZES { return Err(Error::new("buzzes", format!("at most {MAX_BUZZES} patterns"))); }
+        let mut buzzes = BTreeMap::new();
+        for (name, text) in &self.buzzes {
+            let path = format!("buzzes.{name}");
+            if !valid_id(name) { return Err(Error::new(path, "a pattern's name is 1–16 of a–z, 0–9 and -")); }
+            if name == "none" { return Err(Error::new(path, "\"none\" means no buzz: pick another name")); }
+            buzzes.insert(name.clone(), parse_pattern(text).map_err(|m| Error::new(&path, m))?);
+        }
         let ids: Vec<&str> = self.profiles.iter().map(|p| p.id.as_str()).collect();
+        let names = Names { ids: &ids, buzzes: &buzzes };
         let mut profiles = Vec::new();
         for (i, raw) in self.profiles.iter().enumerate() {
             let at = format!("profiles[{i}]");
@@ -351,7 +590,15 @@ impl RawFile {
             if ids[..i].contains(&raw.id.as_str()) { return Err(Error::new(format!("{at}.id"), format!("\"{}\" is used twice", raw.id))); }
             let name_len = raw.name.chars().count();
             if name_len == 0 || name_len > 24 { return Err(Error::new(format!("{at}.name"), "1–24 characters")); }
-            if !(1..=4).contains(&raw.buzz) { return Err(Error::new(format!("{at}.buzz"), "1–4 buzzes")); }
+            let buzz = match &raw.buzz {
+                Value::Null => find_buzz("tap", &buzzes).expect("built in"),
+                Value::Number(n) => match n.as_u64().filter(|n| (1..=4).contains(n)) {
+                    Some(n) => find_buzz(["tap", "double", "triple", "quad"][n as usize - 1], &buzzes).expect("built in"),
+                    None => return Err(Error::new(format!("{at}.buzz"), "1–4 buzzes")),
+                },
+                Value::String(name) => find_buzz(name, &buzzes).ok_or_else(|| Error::new(format!("{at}.buzz"), unknown_buzz(name)))?,
+                _ => return Err(Error::new(format!("{at}.buzz"), "1–4 buzzes, or a pattern's name")),
+            };
             let mut hosts = Vec::new();
             for (j, name) in raw.hosts.iter().enumerate() {
                 let host = Hosts::from_name(name).ok_or_else(|| Error::new(format!("{at}.hosts[{j}]"), unknown_hosts(name)))?;
@@ -370,11 +617,11 @@ impl RawFile {
             for (name, value) in &raw.gestures {
                 let path = format!("{at}.gestures.{name}");
                 let gesture = Gesture::from_name(name).ok_or_else(|| Error::new(&path, format!(
-                    "unknown gesture (one of {})", Gesture::ALL.map(Gesture::name).join(", "))))?;
-                gestures.insert(gesture, parse_binding(value, gesture, &ids, &path)?);
+                    "unknown gesture (one of {}, or band.<event> / band.<finger>.<event>)", Gesture::ALL.map(Gesture::name).join(", "))))?;
+                gestures.insert(gesture, parse_binding(value, gesture, &names, &path)?);
             }
             profiles.push(Profile {
-                id: raw.id.clone(), name: raw.name.clone(), buzz: raw.buzz, hosts,
+                id: raw.id.clone(), name: raw.name.clone(), buzz, hosts,
                 typing: raw.typing, pointer: raw.pointer, gestures, apps: raw.apps.clone(),
             });
         }
@@ -384,7 +631,7 @@ impl RawFile {
             let mut chars = key.chars();
             let (Some(letter), None) = (chars.next(), chars.next()) else { return Err(Error::new(path, "a menu key is one letter or digit")) };
             if !(letter.is_ascii_lowercase() || letter.is_ascii_digit()) { return Err(Error::new(path, "a menu key is a–z or 0–9")); }
-            let action = parse_action(text, &ids, &path)?;
+            let action = parse_action_in(text, &names, &path)?;
             if matches!(action, Action::Hold(_) | Action::Menu) { return Err(Error::new(path, "the menu can't hold a key or open itself")); }
             menu.insert(letter, action);
         }
@@ -402,7 +649,18 @@ impl RawFile {
         for key in self.start.keys() {
             if !["phone", "computer", "tv"].contains(&key.as_str()) { return Err(Error::new(format!("start.{key}"), "start is for phone, computer and tv")); }
         }
-        Ok(ProfileSet { name: self.name, profiles, menu, start })
+        let mut feedback = BTreeMap::new();
+        for (key, name) in &self.feedback {
+            let path = format!("feedback.{key}");
+            let moment = Feedback::from_name(key).ok_or_else(|| Error::new(&path, format!(
+                "unknown moment (one of {})", Feedback::ALL.map(|(_, n, _)| n).join(", "))))?;
+            let pattern = if name == "none" { None } else { Some(find_buzz(name, &buzzes).ok_or_else(|| Error::new(&path, unknown_buzz(name)))?) };
+            feedback.insert(moment, pattern);
+        }
+        for (moment, _, default) in Feedback::ALL {
+            feedback.entry(moment).or_insert_with(|| find_buzz(default, &buzzes));
+        }
+        Ok(ProfileSet { name: self.name, profiles, menu, start, buzzes, feedback })
     }
 }
 
@@ -418,23 +676,41 @@ fn unknown_hosts(name: &str) -> String {
     format!("unknown host kind \"{name}\" (one of {})", Hosts::ALL.map(Hosts::name).join(", "))
 }
 
-fn parse_binding(value: &Value, gesture: Gesture, ids: &[&str], path: &str) -> Result<Binding, Error> {
+/// What an action's text may name: the file's profile ids and its buzz patterns.
+pub struct Names<'a> {
+    pub ids: &'a [&'a str],
+    pub buzzes: &'a BTreeMap<String, Pattern>,
+}
+
+/// A pattern by name: the file's, else a built-in one.
+pub fn find_buzz(name: &str, buzzes: &BTreeMap<String, Pattern>) -> Option<Pattern> {
+    buzzes.get(name).cloned().or_else(|| BUILTIN_BUZZES.iter().find(|(n, _)| *n == name).map(|(_, text)| parse_pattern(text).expect("built-in patterns are valid")))
+}
+
+fn unknown_buzz(name: &str) -> String {
+    format!("no buzz pattern \"{name}\" (the file's buzzes, or one of {})", BUILTIN_BUZZES.map(|(n, _)| n).join(", "))
+}
+
+fn parse_binding(value: &Value, gesture: Gesture, names: &Names, path: &str) -> Result<Binding, Error> {
     let action = |text: &Value, path: &str| -> Result<Action, Error> {
         let text = text.as_str().ok_or_else(|| Error::new(path, "an action is a string, like \"media:playPause\""))?;
-        let action = parse_action(text, ids, path)?;
+        let action = parse_action_in(text, names, path)?;
         if matches!(action, Action::Hold(_)) && gesture != Gesture::MiddleHold {
             return Err(Error::new(path, "hold: only works on middle.hold (it's released with the finger)"));
         }
         Ok(action)
     };
     match value {
-        Value::String(_) => Ok(Binding { default: Some(action(value, path)?), variants: Vec::new() }),
+        Value::String(_) => Ok(Binding { default: Some(action(value, path)?), variants: Vec::new(), buzz: None }),
         Value::Object(map) => {
             let mut binding = Binding::default();
             for (key, value) in map {
                 let path = format!("{path}.{key}");
                 if key == "default" {
                     binding.default = Some(action(value, &path)?);
+                } else if key == "buzz" {
+                    let name = value.as_str().ok_or_else(|| Error::new(&path, "a buzz is a pattern's name, like \"tick\""))?;
+                    binding.buzz = Some(find_buzz(name, names.buzzes).ok_or_else(|| Error::new(&path, unknown_buzz(name)))?);
                 } else {
                     let hosts = Hosts::from_name(key).ok_or_else(|| Error::new(&path, unknown_hosts(key)))?;
                     binding.variants.push((hosts, action(value, &path)?));
@@ -442,12 +718,19 @@ fn parse_binding(value: &Value, gesture: Gesture, ids: &[&str], path: &str) -> R
             }
             Ok(binding)
         }
-        _ => Err(Error::new(path, "an action string, or an object of them by host kind (\"phone\", \"computer\", \"tv\", …, \"default\")")),
+        _ => Err(Error::new(path, "an action string, or an object of them by host kind (\"phone\", \"computer\", \"tv\", …, \"default\", and \"buzz\")")),
     }
 }
 
-/// One action, like `media:playPause`, `key:cmd+shift+m`, `profile:write` (PROFILES.md lists them).
+/// One action, like `media:playPause`, `key:cmd+shift+m`, `profile:write` (PROFILES.md lists
+/// them), in a file with these profile ids and only the built-in buzz patterns.
 pub fn parse_action(text: &str, ids: &[&str], path: &str) -> Result<Action, Error> {
+    parse_action_in(text, &Names { ids, buzzes: &BTreeMap::new() }, path)
+}
+
+/// One action, naming the file's profiles and buzz patterns.
+pub fn parse_action_in(text: &str, names: &Names, path: &str) -> Result<Action, Error> {
+    let ids = names.ids;
     let fail = |message: String| Error::new(path, message);
     let (kind, arg) = text.split_once(':').unwrap_or((text, ""));
     Ok(match kind {
@@ -496,7 +779,13 @@ pub fn parse_action(text: &str, ids: &[&str], path: &str) -> Result<Action, Erro
             "previous" => HostTarget::Previous,
             kind => HostTarget::Kind(Hosts::from_name(kind).ok_or_else(|| fail(format!("host:next, host:previous or a kind ({})", Hosts::ALL.map(Hosts::name).join(", "))))?),
         }),
-        _ => return Err(fail(format!("unknown action \"{text}\" (none, menu, write, phoneMute, call:, media:, key:, hold:, type:, mouse:, profile:, host:)"))),
+        "buzz" => Action::Buzz(find_buzz(arg, names.buzzes).ok_or_else(|| fail(unknown_buzz(arg)))?),
+        "apps" => match arg {
+            "next" => Action::Apps(true),
+            "previous" => Action::Apps(false),
+            _ => return Err(fail(format!("unknown apps action \"{arg}\" (apps:next, apps:previous)"))),
+        },
+        _ => return Err(fail(format!("unknown action \"{text}\" (none, menu, write, phoneMute, call:, media:, key:, hold:, type:, mouse:, profile:, host:, buzz:, apps:)"))),
     })
 }
 

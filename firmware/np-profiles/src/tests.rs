@@ -162,3 +162,58 @@ fn a_hold_is_not_a_tap() {
     assert!(taps.poll(3.0).is_empty());
     assert_eq!(taps.tap(Finger::Index, false, 3.0, 1), Some(1));
 }
+
+#[test]
+fn buzz_patterns() {
+    assert_eq!(parse_pattern("250 _200 250*90"), Ok(vec![
+        Pulse { at_ms: 0, ms: 250, strength: DEFAULT_STRENGTH }, Pulse { at_ms: 450, ms: 250, strength: 90 }]));
+    assert_eq!(pattern_ms(&parse_pattern("250 _200 250*90").unwrap()), 700);
+    assert_eq!(Pulse { at_ms: 0, ms: 1, strength: 100 }.amplitude(), 255);
+    assert_eq!(Pulse { at_ms: 0, ms: 1, strength: 63 }.amplitude(), 161);
+    for bad in ["", "_100 200", "200 _100", "200 _100 _100 200", "10", "2001", "200*0", "200*101", "200x", "-5", "200 _5000 200",
+                "2000 _100 2000 _100 2000 _100 2000 _100 2000"] {
+        assert!(parse_pattern(bad).is_err(), "{bad:?}");
+    }
+    for (name, text) in BUILTIN_BUZZES { assert!(parse_pattern(text).is_ok(), "{name}"); }
+}
+
+#[test]
+fn band_events_name_what_the_band_says() {
+    let swipe_in = Gesture::from_name("band.thumb.swipeIn").unwrap();
+    assert_eq!(swipe_in.name(), "band.thumb.swipeIn");
+    let Gesture::Band(event) = swipe_in else { panic!() };
+    assert!(event.matches("thumb", "swipeIn", "unknown"));
+    assert!(!event.matches("index", "swipeIn", "unknown"));
+    assert_eq!(Gesture::from_name("band.wake").unwrap().name(), "band.wake");
+    assert!(Gesture::from_name("band.pinky.tap").is_none() && Gesture::from_name("band.index.squeeze").is_none());
+    let names: Vec<String> = BandEvent::of_message("index", "tap", "singleTap").into_iter().map(|e| Gesture::Band(e).name()).collect();
+    assert_eq!(names, ["band.index.tap", "band.index.singleTap", "band.tap", "band.singleTap"]);
+    assert_eq!(BandEvent::of_message("notApplicable", "wake", "unknown").len(), 1);
+}
+
+#[test]
+fn the_buzzes_vector_resolves() {
+    let set = ProfileSet::parse(&vectors("valid").into_iter().find(|(n, _)| n == "buzzes-and-flicks.json").unwrap().1).unwrap();
+    let zap = parse_pattern("40*100 _60 40*100").unwrap();
+    assert_eq!(set.feedback(Feedback::AlertQuestion), Some(&zap));
+    assert_eq!(set.feedback(Feedback::Connected), None, "none is silent");
+    // A file's pattern replaces the built-in one of the same name, everywhere it's used.
+    assert_eq!(set.feedback(Feedback::AlertDone), Some(&parse_pattern("120 _80 120 _80 300*95").unwrap()));
+    assert_eq!(set.feedback(Feedback::Refused), set.pattern("long").as_ref());
+    assert_eq!(set.feedback(Feedback::Gesture), set.pattern("tick").as_ref());
+    assert_eq!(set.menu.get(&'z'), Some(&Action::Buzz(zap.clone())));
+    let car = &set.profiles[0];
+    assert_eq!(car.buzz, set.pattern("rise").unwrap());
+    assert_eq!(car.action(Gesture::FlickUp, HostKind::Phone), Some(&Action::Media(Media::VolumeUp)));
+    assert_eq!(car.action(Gesture::FlickUp, HostKind::Mac), None);
+    assert_eq!(car.buzz(Gesture::FlickLeft), Some(&zap));
+    assert_eq!(car.buzz(Gesture::FlickRight), None);
+    assert!(car.uses_motion(HostKind::Phone) && car.flicks(HostKind::Phone));
+    assert_eq!(car.band_events().count(), 4);
+    assert_eq!(car.action(Gesture::from_name("band.wake").unwrap(), HostKind::Phone), None);
+    let desk = &set.profiles[1];
+    assert_eq!(desk.buzz, set.pattern("triple").unwrap());
+    assert_eq!(desk.action(Gesture::FlickRight, HostKind::Mac), Some(&Action::Apps(true)));
+    assert!(!desk.flicks(HostKind::Mac), "a pointer profile's pinch moves the pointer");
+    assert_eq!(set.profiles[2].buzz, set.pattern("tap").unwrap(), "null is the default");
+}

@@ -8,7 +8,7 @@ use band_core::gestures::{GestureRouter, Recognized, Swipe, Tap};
 use band_core::haptics::HapticsCommand;
 use band_core::session::BandSession;
 use log::{info, warn};
-use np_profiles::{Action as Do, Button, Finger, Gesture, HostTarget, Media, Profile, Taps};
+use np_profiles::{Action as Do, BandEvent, Button, Feedback, Finger, Gesture, HostTarget, Media, Profile, Taps};
 
 use crate::control;
 use crate::remote::{buttons, keys, Action, Kind, MediaKey, Remote};
@@ -63,8 +63,22 @@ const HOLD_LOST: f64 = 10.0;
 const POINTER_WARM: f64 = 30.0;
 /// Seconds between two alerts that come close together, so each pattern can be told apart.
 const ALERT_GAP: f64 = 0.5;
-/// Seconds between a ringing call's buzzes (`buzz_ring`).
+/// Seconds between a ringing call's buzzes (or the pattern and a second, if that's longer).
 const RING_EVERY: f64 = 3.0;
+/// A flick: the wrist turning at least this fast (°/s, the air mouse's frame), mostly one way.
+const FLICK_RATE: f64 = 150.0;
+/// ... with the main direction at least this many times the other.
+const FLICK_DOMINANCE: f64 = 1.8;
+/// Below this the wrist is still again and the next flick may come (°/s).
+const FLICK_REARM: f64 = 60.0;
+/// A turn back the other way this soon after a flick is the hand returning, not a flick.
+const FLICK_RETURN: f64 = 0.45;
+/// Motion faster than this (°/s) is a swing worth reporting in the gesture lab.
+const SWING_RATE: f64 = 40.0;
+/// The same raw band event this soon again is the band repeating itself.
+const BAND_EVENT_REPEAT: f64 = 0.15;
+/// The app switcher lets go of ⌘ by itself after this long (a lost release).
+const SWITCHER_MAX: f64 = 15.0;
 /// A typing profile's handwriting sleeps after this long with nothing written (the band's model
 /// costs battery); any gesture wakes it.
 const WRITE_IDLE: f64 = 90.0;
@@ -78,6 +92,28 @@ struct Pointer {
     carry: [f64; 2],
     /// Degrees moved during this pinch hold.
     moved: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Direction { Up, Down, Left, Right }
+
+impl Direction {
+    fn name(self) -> &'static str { match self { Direction::Up => "up", Direction::Down => "down", Direction::Left => "left", Direction::Right => "right" } }
+    fn opposite(self) -> Direction { match self { Direction::Up => Direction::Down, Direction::Down => Direction::Up, Direction::Left => Direction::Right, Direction::Right => Direction::Left } }
+    fn gesture(self) -> Gesture { match self { Direction::Up => Gesture::FlickUp, Direction::Down => Gesture::FlickDown, Direction::Left => Gesture::FlickLeft, Direction::Right => Gesture::FlickRight } }
+    fn of(x: f64, y: f64) -> Direction {
+        if x.abs() >= y.abs() { if x > 0.0 { Direction::Right } else { Direction::Left } } else if y > 0.0 { Direction::Up } else { Direction::Down }
+    }
+}
+
+/// Flicks during a pinch hold, from the wrist's turn rate.
+#[derive(Default)]
+struct Flicks {
+    /// Still enough for the next flick.
+    armed: bool,
+    last: Option<(Direction, f64)>,
+    /// The fastest moment of the swing going on (°/s, x, y), and whether it flicked.
+    swing: Option<(f64, f64, f64, bool)>,
 }
 
 /// `write`: the band's handwriting on, typed on the host, until nothing is written for a while.
@@ -132,6 +168,16 @@ pub struct Controller<'a> {
     quiet_off: bool,
     /// A new pinch hold whose dial band-core should arm once motion flows (`poll`).
     arm_dial: bool,
+    /// Flick detection for the pinch held now.
+    flicks: Flicks,
+    /// The index finger is down (the band's `press`), since when: flicks count from then.
+    pinch_down: Option<f64>,
+    /// The app switcher holding ⌘ (or Alt) on a host, since when (`apps:` on a flick).
+    switcher: Option<(u16, f64)>,
+    /// Raw band events lately fired, for the band's repeats (`BAND_EVENT_REPEAT`).
+    band_fired: Vec<(BandEvent, f64)>,
+    /// Band messages already looked at (sequence, timestamp).
+    band_seen: std::collections::VecDeque<(u64, u64)>,
     /// A typing profile's handwriting stays on until then (see `WRITE_IDLE`).
     write_awake_until: f64,
     /// Whether the profile wanted typing at the last poll (switching to it wakes the handwriting).
@@ -165,42 +211,42 @@ impl<'a> Controller<'a> {
             menu: None, menu_closed: f64::NEG_INFINITY, quiet_off: false,
             hold_seen: f64::NEG_INFINITY, pointer: Pointer::default(),
             write_awake_until: f64::NEG_INFINITY, was_typing: false, burst: None, pointer_warm_until: f64::NEG_INFINITY, arm_dial: false,
+            flicks: Flicks::default(), pinch_down: None, switcher: None, band_fired: Vec::new(), band_seen: Default::default(),
         }
     }
 
-    fn buzz(&mut self, now: f64, count: usize) {
-        for i in 0..count {
-            self.haptics.push_back((now + i as f64 * 0.25, HapticsCommand::Vibrate { duration_ms: 60, amplitude: 160 }));
+    /// Plays a pattern from `start`, its pulses in time order among what's queued.
+    fn play(&mut self, start: f64, pattern: &[np_profiles::Pulse]) {
+        for pulse in pattern {
+            let at = start + f64::from(pulse.at_ms) / 1000.0;
+            let command = HapticsCommand::Vibrate { duration_ms: u64::from(pulse.ms), amplitude: pulse.amplitude() };
+            let index = self.haptics.iter().position(|(due, _)| *due > at).unwrap_or(self.haptics.len());
+            self.haptics.insert(index, (at, command));
         }
     }
 
-    /// One long buzz: the menu didn't get a letter it knows.
-    /// Unlike the short counts of a switch and the long buzz of a refusal: done is two firm
-    /// pulses, a question two taps and a long one (rising, like a question), an error one very long.
+    /// The set's pattern for one of the band's own moments (nothing if it's `none`).
+    fn feedback(&mut self, now: f64, moment: Feedback) {
+        if let Some(pattern) = crate::profiles::current().feedback(moment).cloned() { self.play(now, &pattern); }
+    }
+
+    /// A built-in (or redefined) pattern by name.
+    fn named(&mut self, now: f64, name: &str) {
+        if let Some(pattern) = crate::profiles::current().pattern(name) { self.play(now, &pattern); }
+    }
+
+    /// An alert from a computer's helper, after any alert still playing (so each can be told apart).
     fn buzz_alert(&mut self, now: f64, alert: crate::remote::Alert) {
         use crate::remote::Alert;
-        let pattern: &[(f64, u32, u8)] = match alert {
-            Alert::Done => &[(0.0, 250, 200), (0.45, 250, 200)],
-            Alert::Question => &[(0.0, 70, 170), (0.2, 70, 170), (0.4, 380, 220)],
-            Alert::Error => &[(0.0, 900, 230)],
-        };
+        let moment = match alert { Alert::Done => Feedback::AlertDone, Alert::Question => Feedback::AlertQuestion, Alert::Error => Feedback::AlertError };
+        let Some(pattern) = crate::profiles::current().feedback(moment).cloned() else { return };
         let start = now.max(self.alerts_until + ALERT_GAP);
-        for &(at, duration_ms, amplitude) in pattern {
-            self.haptics.push_back((start + at, HapticsCommand::Vibrate { duration_ms: duration_ms as _, amplitude: amplitude as _ }));
-            self.alerts_until = self.alerts_until.max(start + at + duration_ms as f64 / 1000.0);
-        }
+        self.play(start, &pattern);
+        self.alerts_until = self.alerts_until.max(start + f64::from(np_profiles::pattern_ms(&pattern)) / 1000.0);
     }
 
-    /// A phone ringing: two long pulses, like a phone's (again every `RING_EVERY` while it rings).
-    fn buzz_ring(&mut self, now: f64) {
-        for at in [0.0, 0.9] {
-            self.haptics.push_back((now + at, HapticsCommand::Vibrate { duration_ms: 600, amplitude: 230 }));
-        }
-    }
-
-    fn buzz_long(&mut self, now: f64) {
-        self.haptics.push_back((now, HapticsCommand::Vibrate { duration_ms: 400, amplitude: 200 }));
-    }
+    /// Something didn't work.
+    fn buzz_long(&mut self, now: f64) { self.feedback(now, Feedback::Refused); }
 
     fn close_menu(&mut self, now: f64) {
         if self.menu.take().is_some() {
@@ -222,7 +268,7 @@ impl<'a> Controller<'a> {
                 info!("MENU: {letter}: {action:?}");
                 // Switches buzz for themselves (`poll`); anything else gets one buzz.
                 let switches = matches!(action, Do::Profile(_) | Do::Host(_));
-                if self.perform(&action, Gesture::IndexHold, &set, now) && !switches { self.buzz(now, 1); }
+                if self.perform(&action, Gesture::IndexHold, &set, now) && !switches && !matches!(action, Do::Buzz(_)) { self.named(now, "tap"); }
             }
             None => {
                 info!("MENU: {letter:?} isn't a menu letter");
@@ -271,13 +317,33 @@ impl<'a> Controller<'a> {
                 // The switch buzzes once for a phone, twice for a computer (`poll`).
                 if !switched {
                     info!("{}: no host to switch to", gesture.name());
-                    self.buzz(now, 3);
+                    self.buzz_long(now);
                     return false;
                 }
             }
             Do::Menu => {
                 info!("MENU: open: write one letter");
                 self.menu = Some(Menu { opened: now, writing_since: None });
+            }
+            Do::Buzz(pattern) => self.play(now, pattern),
+            Do::Apps(forward) => {
+                let Some(active) = self.active().filter(|a| a.kind.computer()) else {
+                    info!("{}: the app switcher is for computers", gesture.name());
+                    self.buzz_long(now);
+                    return false;
+                };
+                let shift = if *forward { 0 } else { keys::SHIFT };
+                // ⌘Tab on a Mac; Alt+Tab elsewhere (⌘ would be sent as Ctrl there).
+                let modifier = if active.kind == Kind::Mac { keys::GUI } else { keys::ALT };
+                let in_pinch = gesture.is_flick() && (self.hold.is_some() || self.pinch_down.is_some());
+                if in_pinch && self.switcher.is_none() && self.talking.is_none() {
+                    if let Some(handle) = self.remote.hold(modifier, 0) { self.switcher = Some((handle, now)); }
+                }
+                if self.switcher.is_some() {
+                    self.remote.send(Action::Key { modifiers: shift, usage: keys::TAB });
+                } else {
+                    self.remote.send(Action::Key { modifiers: modifier | shift, usage: keys::TAB });
+                }
             }
             Do::Write(seconds) => {
                 if self.burst.take().is_some() {
@@ -309,7 +375,36 @@ impl<'a> Controller<'a> {
         let Some(active) = self.active() else { return };
         let Some(action) = active.action(gesture).cloned() else { return };
         info!("GESTURE: {} in {}: {action:?}", gesture.name(), active.profile().id);
-        self.perform(&action, gesture, &active.set, now);
+        if !self.perform(&action, gesture, &active.set, now) { return; }
+        // Its own buzz, else the set's `gesture` one (switches and buzzes say enough by themselves).
+        match active.profile().buzz(gesture).cloned() {
+            Some(pattern) => self.play(now, &pattern),
+            None if !matches!(action, Do::Profile(_) | Do::Host(_) | Do::Buzz(_)) => self.feedback(now, Feedback::Gesture),
+            None => {}
+        }
+    }
+
+    /// The band's message as raw `band.` events, for those the profile binds.
+    fn band_events(&mut self, message: &band_core::events::GestureMessage, active: &Active, now: f64) {
+        let age = now - message.received_at;
+        if message.synthetic || !(-0.1..=0.35).contains(&age) { return; }
+        let identity = (message.sequence, message.timestamp_us);
+        if self.band_seen.contains(&identity) { return; }
+        self.band_seen.push_back(identity);
+        if self.band_seen.len() > 32 { self.band_seen.pop_front(); }
+        let bound: Vec<BandEvent> = active.profile().band_events().collect();
+        if bound.is_empty() { return; }
+        self.band_fired.retain(|(_, at)| now - at < BAND_EVENT_REPEAT);
+        for event in BandEvent::of_message(&message.finger, &message.action, &message.derived_action) {
+            if !bound.contains(&event) || self.band_fired.iter().any(|(e, _)| *e == event) { continue; }
+            self.band_fired.push((event, now));
+            self.gesture(Gesture::Band(event), now);
+        }
+    }
+
+    /// Lets go of the app switcher's ⌘: the app it reached comes to the front.
+    fn end_switcher(&mut self) {
+        if let Some((handle, _)) = self.switcher.take() { self.remote.release(handle); }
     }
 
     /// Gestures go through the active host's profile (`gesture`). The pinch is special: held, it
@@ -322,8 +417,7 @@ impl<'a> Controller<'a> {
             Event::Connected => {
                 info!("RESULT: owner trust accepted and streams subscribed: the band is live");
                 control::set_band_state("live");
-                // One short buzz: the band is connected to the dongle.
-                self.buzz(now, 1);
+                self.feedback(now, Feedback::Connected);
             }
             Event::Gesture(message) => {
                 self.gestures += 1;
@@ -344,14 +438,27 @@ impl<'a> Controller<'a> {
                     let _ = self.router.gesture(&message, now);
                     return;
                 }
+                if let Some(active) = &active { self.band_events(&message, active, now); }
+                if message.finger == "index" && !message.synthetic {
+                    if message.action == "press" || message.derived_action == "buttonPress" {
+                        if self.pinch_down.is_none() { self.flicks = Flicks::default(); }
+                        self.pinch_down.get_or_insert(now);
+                    } else if released {
+                        self.pinch_down = None;
+                        self.end_switcher();
+                    }
+                }
                 if message.finger == "index" && !message.synthetic {
                     if message.derived_action == "buttonHold" {
                         // A repeat of the same hold keeps its start (and whether it moved).
                         self.pointer_warm_until = now + POINTER_WARM;
                         if self.hold.is_none() || now - self.hold_seen > HOLD_LOST {
-                            self.hold = Some((now, false));
+                            // A flick between the press and the band's hold message counts for the hold.
+                            let flicked = self.pinch_down.is_some() && self.flicks.last.is_some();
+                            self.hold = Some((now, flicked));
                             self.pointer.moved = 0.0;
                             self.arm_dial = true;
+                            if !flicked { self.flicks = Flicks::default(); }
                         }
                         self.hold_seen = now;
                     } else if released {
@@ -381,7 +488,10 @@ impl<'a> Controller<'a> {
                     Recognized::Tap(Tap::MiddleHold) => {
                         let Some(action) = active.action(Gesture::MiddleHold).cloned() else { return };
                         // A buzz: it started (speak now, for voice and push-to-talk).
-                        self.haptics.push_back((now, HapticsCommand::Vibrate { duration_ms: 40, amplitude: 140 }));
+                        match active.profile().buzz(Gesture::MiddleHold).cloned() {
+                            Some(pattern) => self.play(now, &pattern),
+                            None => self.feedback(now, Feedback::HoldStart),
+                        }
                         match action {
                             Do::Hold(chord) if self.talking.is_none() => {
                                 info!("GESTURE: middle.hold: holding {chord:?}");
@@ -399,7 +509,9 @@ impl<'a> Controller<'a> {
             }
             Event::Motion { timestamp_us, gyro } => {
                 self.motion += 1;
+                let flicks = active.as_ref().is_some_and(|a| a.profile().flicks(a.kind.host_kind()));
                 self.point(timestamp_us, gyro, now, active.as_ref().is_some_and(Active::points), hand);
+                if let Some(direction) = self.flick(gyro, now, flicks, hand) { self.gesture(direction.gesture(), now); }
             }
             Event::DialState(on) => {
                 info!("pinch dial {}", if on { "engaged" } else { "released" });
@@ -452,13 +564,19 @@ impl<'a> Controller<'a> {
             }
         }
         if let Some(kind) = self.remote.take_switched() {
-            self.buzz(now, if kind == Kind::Phone { 1 } else { 2 });
+            self.feedback(now, if kind == Kind::Phone { Feedback::HostPhone } else { Feedback::HostComputer });
         }
-        if let Some(count) = self.remote.take_profile_switched() { self.buzz(now, count as usize); }
+        if let Some(pattern) = self.remote.take_profile_switched() { self.play(now, &pattern); }
         if let Some(alert) = self.remote.take_alert() { self.buzz_alert(now, alert); }
+        if let Some(pattern) = self.remote.take_play() { self.play(now, &pattern); }
+        if self.switcher.is_some_and(|(_, since)| now - since > SWITCHER_MAX) {
+            warn!("app switcher held {SWITCHER_MAX} s without the pinch letting go: letting go");
+            self.end_switcher();
+        }
         if crate::ancs::ringing() && now >= self.next_ring {
-            self.buzz_ring(now);
-            self.next_ring = now + RING_EVERY;
+            let pattern = crate::profiles::current().feedback(Feedback::CallRinging).cloned().unwrap_or_default();
+            self.play(now, &pattern);
+            self.next_ring = now + RING_EVERY.max(f64::from(np_profiles::pattern_ms(&pattern)) / 1000.0 + 1.0);
         }
         self.check_taps();
         for (finger, count) in self.taps.poll(now) {
@@ -470,8 +588,10 @@ impl<'a> Controller<'a> {
         // Wrist motion streams ~70 messages a second: only while a pinch hold can use it, in a
         // profile that has a use for it (the dial, or the pointer).
         let uses_motion = active.as_ref().is_some_and(|a| a.profile().uses_motion(a.kind.host_kind()));
-        let warm = active.as_ref().is_some_and(Active::points) && now < self.pointer_warm_until;
-        let want_motion = (uses_motion && (warm || self.hold.is_some() && now - self.hold_seen < HOLD_LOST) && self.menu.is_none())
+        let warm = active.as_ref().is_some_and(|a| a.points() || a.profile().flicks(a.kind.host_kind())) && now < self.pointer_warm_until;
+        let pinching = self.hold.is_some() && now - self.hold_seen < HOLD_LOST || self.pinch_down.is_some_and(|at| now - at < HOLD_LOST);
+        // The gesture lab shows every pinch's swings, flicks bound or not.
+        let want_motion = ((uses_motion || control::lab_on()) && (warm || pinching) && self.menu.is_none())
             || control::FORCE_MOTION.load(std::sync::atomic::Ordering::Relaxed);
         // Motion was off when the pinch began, so band-core's dial wouldn't arm by itself.
         if std::mem::take(&mut self.arm_dial) && want_motion { session.arm_dial(now); }
@@ -516,8 +636,8 @@ impl<'a> Controller<'a> {
                         (false, _) if write_mode => "asleep (nothing written for a while; any write-mode gesture wakes it)",
                         (false, _) => "off",
                     });
-                    // Two buzzes: start writing; one: stopped. (The menu buzzes for itself.)
-                    if !for_menu { self.buzz(now, if want { 2 } else { 1 }); }
+                    // Write now, or stopped. (The menu buzzes for itself.)
+                    if !for_menu { self.feedback(now, if want { Feedback::WriteOn } else { Feedback::WriteOff }); }
                     return bytes;
                 }
                 Err(error) => {
@@ -525,7 +645,7 @@ impl<'a> Controller<'a> {
                     if self.menu.is_some() {
                         // No handwriting now: a pinch hold switches host, as it did before the menu.
                         self.close_menu(now);
-                        if !self.remote.step(true) { self.buzz(now, 3); }
+                        if !self.remote.step(true) { self.buzz_long(now); }
                     }
                 }
             }
@@ -540,8 +660,8 @@ impl<'a> Controller<'a> {
             if started {
                 // What the band wrote before the menu opened isn't the menu's letter.
                 session.take_written();
-                // Two buzzes: write the letter.
-                self.buzz(now, 2);
+                // Write the letter now.
+                self.feedback(now, Feedback::MenuReady);
             } else if expired {
                 info!("MENU: no letter written");
                 self.close_menu(now);
@@ -609,10 +729,52 @@ impl Controller<'_> {
     }
 }
 
+impl Controller<'_> {
+    /// One gyro sample during a pinch, in a profile with flicks: a flick's direction, once per
+    /// flick. Uses the air mouse's frame and its learned gyro offset (`point` learns it first).
+    fn flick(&mut self, raw: [f64; 3], now: f64, enabled: bool, hand: Option<Hand>) -> Option<Direction> {
+        let pinching = self.menu.is_none() && (self.hold.is_some() && now - self.hold_seen < HOLD_LOST || self.pinch_down.is_some());
+        let lab = control::lab_on();
+        if !(enabled || lab) || !pinching {
+            self.flicks.armed = false;
+            self.flicks.swing = None;
+            return None;
+        }
+        let [x, y] = draw::project(self.pointer.bias.rate(raw), RIGHT_PALM_DOWN_ROLL);
+        let y = if hand == Some(Hand::Left) { -y } else { y };
+        let rate = x.hypot(y);
+        let flicks = &mut self.flicks;
+        // The lab: each swing's peak, once it's over.
+        if rate >= SWING_RATE {
+            if flicks.swing.is_none_or(|(peak, ..)| rate > peak) {
+                let fired = flicks.swing.is_some_and(|(.., fired)| fired);
+                flicks.swing = Some((rate, x, y, fired));
+            }
+        } else if let Some((peak, px, py, fired)) = flicks.swing.take() {
+            if lab { info!("LAB {} {} {peak:.0}", if fired { "flick" } else { "swing" }, Direction::of(px, py).name()); }
+        }
+        if rate < FLICK_REARM {
+            flicks.armed = true;
+            return None;
+        }
+        let (major, minor) = if x.abs() >= y.abs() { (x.abs(), y.abs()) } else { (y.abs(), x.abs()) };
+        if !enabled || !flicks.armed || rate < FLICK_RATE || major < FLICK_DOMINANCE * minor { return None; }
+        let direction = Direction::of(x, y);
+        flicks.armed = false;
+        if flicks.last.is_some_and(|(last, at)| last.opposite() == direction && now - at < FLICK_RETURN) { return None; }
+        flicks.last = Some((direction, now));
+        if let Some(swing) = flicks.swing.as_mut() { swing.3 = true; }
+        // A pinch that flicked isn't index.hold when it lets go.
+        if let Some(hold) = self.hold.as_mut() { hold.1 = true; }
+        Some(direction)
+    }
+}
+
 impl Drop for Controller<'_> {
     /// The band went away mid push-to-talk: don't leave ⌥Space held on the computer.
     fn drop(&mut self) {
         if let Some((handle, _)) = self.talking.take() { self.remote.release(handle); }
+        self.end_switcher();
     }
 }
 

@@ -239,6 +239,8 @@ pub struct BandSession {
     battery_unavailable: bool,
     raw_emg: bool,
     raw_requested: bool,
+    /// neural-playground: describe every gesture message in full (the dongle's gesture lab).
+    describe_gestures: bool,
     config_service_opened: bool,
     raw_request_id: u64,
     raw_request: Option<RawRequest>,
@@ -352,6 +354,7 @@ impl BandSession {
             battery_unavailable: false,
             raw_emg,
             raw_requested: false,
+            describe_gestures: false,
             config_service_opened: false,
             raw_request_id: 6,
             raw_request: None,
@@ -436,6 +439,12 @@ impl BandSession {
     /// The guess in use, if the band offered a newer scheme.
     pub fn scheme_guess(&self) -> Option<usize> {
         self.guessing.then_some(self.scheme_guess)
+    }
+
+    /// neural-playground: every gesture message's fields, as `LAB fields <finger> <action>
+    /// <derived>: …` diagnostics (to find what else the band says, like pressure).
+    pub fn set_describe_gestures(&mut self, on: bool) {
+        self.describe_gestures = on;
     }
 
     /// Also describe every frame after setup (channel, type words, size).
@@ -1918,6 +1927,9 @@ impl BandSession {
                 synthetic: fields.integer(12)? != 0,
                 received_at: time,
             };
+            if self.describe_gestures {
+                self.diagnostics.push(format!("LAB fields {} {} {}: {}", gesture.finger, gesture.action, gesture.derived_action, fields.describe()));
+            }
             if self.probing() {
                 let shown = fields.describe();
                 let name = format!("{} {} {}", gesture.finger, gesture.action, gesture.derived_action);

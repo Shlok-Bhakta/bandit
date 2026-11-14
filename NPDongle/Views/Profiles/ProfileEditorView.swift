@@ -1,7 +1,7 @@
 import DongleProtocol
 import SwiftUI
 
-/// One profile: its name, id, look, who may use it, and what each of the 14 gestures does.
+/// A profile, with its gesture bindings first and settings below.
 struct ProfileEditorView: View {
     @Environment(DongleModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -45,6 +45,22 @@ struct ProfileEditorView: View {
                     ProblemText(error: error)
                 }
             }
+            ForEach(ProfileGesture.Group.allCases.filter { $0 != .band }, id: \.self) { group in
+                Section(group.rawValue) {
+                    ForEach(ProfileGesture.allCases.filter { $0.group == group }, id: \.self) { gesture in
+                        NavigationLink {
+                            BindingEditorView(uid: uid, gesture: gesture)
+                        } label: {
+                            GestureRow(gesture: gesture, binding: profile.wrappedValue[gesture],
+                                       broken: problem(index)?.path.hasPrefix("profiles[\(index)].gestures.\(gesture.rawValue)") == true)
+                        }
+                    }
+                }
+            }
+            Section {
+                NavigationLink { BandEventsView(uid: uid) } label: { Label("Band events (experimental)", systemImage: "waveform.path") }
+                FirmwareFeatureNote()
+            }
             Section {
                 TextField("Name", text: profile.name)
                 if profile.wrappedValue.name.unicodeScalars.count > 24 {
@@ -74,8 +90,13 @@ struct ProfileEditorView: View {
                 ColorSwatches(color: profile.color)
             }
             Section {
-                Stepper("\(profile.wrappedValue.buzz ?? 1) buzz\(profile.wrappedValue.buzz ?? 1 == 1 ? "" : "es") when switching to it",
-                        value: Binding(get: { profile.wrappedValue.buzz ?? 1 }, set: { profile.wrappedValue.buzz = $0 }), in: 1...4)
+                Picker("Switch buzz", selection: Binding(get: { profile.wrappedValue.buzzName.map { "pattern:" + $0 } ?? "count:\(profile.wrappedValue.buzz ?? 1)" }, set: { value in
+                    if value.hasPrefix("count:"), let count = Int(value.dropFirst(6)) { profile.wrappedValue.buzz = count; profile.wrappedValue.buzzName = nil }
+                    else { profile.wrappedValue.buzzName = String(value.dropFirst(8)); profile.wrappedValue.buzz = nil }
+                })) {
+                    ForEach(1...4, id: \.self) { Text("\($0) buzzes").tag("count:\($0)") }
+                    ForEach(store.set.buzzNames, id: \.self) { Text($0).tag("pattern:" + $0) }
+                }
                 Toggle(isOn: profile.typing) {
                     Label { Text("Type handwriting"); Text("Computers: what you write with a finger is typed").font(.caption) } icon: { Image(systemName: "pencil.and.scribble") }
                 }
@@ -87,18 +108,6 @@ struct ProfileEditorView: View {
             }
             hostsSection(profile)
             AppsSection(apps: profile.apps, broken: problem(index)?.path.hasPrefix("profiles[\(index)].apps") == true)
-            ForEach(ProfileGesture.Group.allCases, id: \.self) { group in
-                Section(group.rawValue) {
-                    ForEach(ProfileGesture.allCases.filter { $0.group == group }, id: \.self) { gesture in
-                        NavigationLink {
-                            BindingEditorView(uid: uid, gesture: gesture)
-                        } label: {
-                            GestureRow(gesture: gesture, binding: profile.wrappedValue[gesture],
-                                       broken: problem(index)?.path.hasPrefix("profiles[\(index)].gestures.\(gesture.rawValue)") == true)
-                        }
-                    }
-                }
-            }
             unknownGestures(profile)
             Section {
                 Button("Delete profile", role: .destructive) { confirmDelete = true }
@@ -205,6 +214,8 @@ struct GestureRow: View {
             Image(systemName: gesture.symbol).foregroundStyle(gesture.tint).frame(width: 26)
             VStack(alignment: .leading, spacing: 2) {
                 Text(gesture.title)
+                    .font(gesture.group == .band ? .callout.monospaced() : .body)
+                    .lineLimit(1).minimumScaleFactor(0.75)
                 Text(summary).font(.caption).foregroundStyle(binding == nil ? .tertiary : .secondary).lineLimit(2)
             }
             Spacer()
@@ -236,7 +247,9 @@ struct BindingEditorView: View {
 
     private func update(default action: String?, overrides: [String: String]) {
         guard let index else { return }
-        store.set.profiles[index][gesture] = GestureBinding.make(default: action, overrides: overrides)
+        var next = GestureBinding.make(default: action, overrides: overrides)
+        if let buzz = binding?.buzz { if next == nil { next = .byHost([:]) }; next?.buzz = buzz }
+        store.set.profiles[index][gesture] = next
     }
 
     private func context(_ key: String?) -> ActionContext {
@@ -253,6 +266,17 @@ struct BindingEditorView: View {
                 Text(overrides.isEmpty ? "Every host" : "Every other host")
             } footer: {
                 Text(gesture.detail)
+            }
+            Section("When this gesture fires") {
+                Picker("Buzz", selection: Binding(get: { binding?.buzz ?? "" }, set: { name in
+                    guard let index else { return }
+                    var next = binding ?? .byHost([:])
+                    next.buzz = name.isEmpty ? nil : name
+                    store.set.profiles[index][gesture] = next
+                })) {
+                    Text("Use set feedback").tag("")
+                    ForEach(store.set.buzzNames, id: \.self) { Text($0).tag($0) }
+                }
             }
             ForEach(GestureBinding.hostKeys.filter { $0 != "default" && overrides[$0] != nil } + overrides.keys.filter { !GestureBinding.hostKeys.contains($0) }.sorted(), id: \.self) { key in
                 Section {
@@ -287,7 +311,7 @@ struct BindingEditorView: View {
                     }
                 }
                 if binding != nil {
-                    Button("Clear this gesture", role: .destructive) { update(default: nil, overrides: [:]) }
+                    Button("Clear this gesture", role: .destructive) { if let index { store.set.profiles[index][gesture] = nil } }
                 }
             } footer: {
                 Text("The most specific kind wins (Mac beats Any computer), then “every other host”. “Nothing” means nothing, even when there's a default.")

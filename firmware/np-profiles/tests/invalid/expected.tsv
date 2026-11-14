@@ -18,3 +18,14 @@ bad-app.json	profiles[0].apps[1]
 apps-on-phone.json	profiles[0].apps
 write-too-long.json	profiles[0].gestures.index.tripleTap
 bad-call.json	profiles[0].gestures.index.tripleTap
+bad-pattern.json	buzzes.x
+pattern-strength.json	buzzes.x
+bad-buzz-name.json	buzzes.Big
+unknown-buzz.json	profiles[0].gestures.index.tap
+unknown-binding-buzz.json	profiles[0].gestures.index.tap.buzz
+unknown-profile-buzz.json	profiles[0].buzz
+unknown-feedback.json	feedback.sneeze
+feedback-pattern.json	feedback.connected
+unknown-band-event.json	profiles[0].gestures.band.pinky.tap
+hold-on-flick.json	profiles[0].gestures.flick.up
+bad-apps.json	profiles[0].gestures.flick.up

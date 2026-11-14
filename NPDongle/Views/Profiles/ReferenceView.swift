@@ -63,8 +63,14 @@ struct ReferenceView: View {
                     }
                 }
             }
+            Section("Buzzes and Gesture lab") {
+                Text("Design patterns in Buzzes. Pulse widths show duration, heights show strength. Play previews a draft without sending the set. Built-ins can be customized for every place they are used.")
+                Text("Feedback chooses a pattern or None for each moment. A binding may choose its own buzz. A profile switch can play 1–4 taps or a named pattern.")
+                Text("In Gesture lab, try movements to discover the band’s raw events. Bind an event in any profile, or inspect raw fields and flick peaks. Lab logging stops when you leave. Flicks, band events and buzz patterns need firmware 0.15.0.")
+                Text("Patterns: 20–2000 ms pulses, 20–3000 ms pauses, strength 1–100. Up to 16 steps, 8 seconds and 120 bytes; start and end with a pulse. Example: 250 _200 250*90.")
+            }
             Section("Limits") {
-                ReferenceLine(title: "Profiles", text: "1–\(ProfileFormat.maxProfiles); ids 1–16 of a–z, 0–9, -; names 1–24 characters; buzz 1–4")
+                ReferenceLine(title: "Profiles", text: "1–\(ProfileFormat.maxProfiles); ids 1–16 of a–z, 0–9, -; names 1–24 characters; buzz 1–4 or a pattern name")
                 ReferenceLine(title: "Menu", text: "one letter a–z or digit 0–9 → any action but hold: and menu")
                 ReferenceLine(title: "Size", text: "at most \(ProfileFormat.maxBytes) bytes minified, the app's own fields (description, symbol, color) included")
             }

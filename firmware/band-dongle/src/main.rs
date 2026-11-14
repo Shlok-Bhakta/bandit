@@ -479,7 +479,10 @@ async fn stream_session(channel: &coc::Channel, identity: &EnrollmentIdentity, r
         }
         let hand = session.hand();
         for event in session.tick(now()) { controller.event(event, now(), hand); }
-        for line in session.take_diagnostics() { info!("band-core: {line}"); }
+        session.set_describe_gestures(control::lab_on());
+        for line in session.take_diagnostics() {
+            if line.starts_with("LAB ") { info!("{line}"); } else { info!("band-core: {line}"); }
+        }
         outgoing.extend(controller.poll(session, now()));
         if session.streams_enabled() && now() >= next_battery {
             next_battery = now() + control::battery_every();
