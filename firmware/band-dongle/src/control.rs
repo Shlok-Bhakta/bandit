@@ -1,7 +1,6 @@
 //! The private control service for the Neural Playground app (CONTROL.md): status, text commands,
 //! the log, and firmware updates. Every characteristic needs an encrypted (bonded) link.
 
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -95,17 +94,70 @@ pub fn set_band_hand(hand: Option<&'static str>) { BAND.lock().unwrap().hand = h
 /// The backlog the app can ask for (`logs`), in bytes: 200 long lines took ~60 KB of a heap that
 /// has ~115 KB free, and the band's receive buffer then couldn't grow (0.12.3 crashed so).
 const RING_BYTES: usize = 12 * 1024;
+/// Live text waiting for subscribers, and the most of the backlog sent at once (per 250 ms).
+const PENDING_BYTES: usize = 4096;
 
+/// The last `RING_BYTES` of log lines, each ending in `\n`, in one buffer allocated at boot:
+/// a `String` per line, all over the heap, left it in pieces.
 struct Ring {
-    lines: VecDeque<String>,
-    /// The bytes in `lines`.
-    bytes: usize,
+    buffer: Vec<u8>,
+    /// Where the oldest byte is, and how many there are.
+    head: usize,
+    len: usize,
+    /// Bytes ever dropped from the front: positions below are gone.
+    dropped: u64,
     /// Text not yet notified to subscribers.
     pending: String,
-    backlog_requested: bool,
+    /// The backlog being sent: the next position and where it ends (what was logged before `logs`).
+    backlog: Option<(u64, u64)>,
 }
 
-static RING: std::sync::Mutex<Ring> = std::sync::Mutex::new(Ring { lines: VecDeque::new(), bytes: 0, pending: String::new(), backlog_requested: false });
+impl Ring {
+    fn push(&mut self, line: &str) {
+        let size = line.len() + 1;
+        if self.buffer.len() < RING_BYTES || size > RING_BYTES { return; }
+        while self.len + size > RING_BYTES {
+            // The oldest line goes, newline and all.
+            let mut gone = 0;
+            while gone < self.len {
+                let byte = self.buffer[(self.head + gone) % RING_BYTES];
+                gone += 1;
+                if byte == b'\n' { break; }
+            }
+            self.head = (self.head + gone) % RING_BYTES;
+            self.len -= gone;
+            self.dropped += gone as u64;
+        }
+        for &byte in line.as_bytes().iter().chain(b"\n") {
+            self.buffer[(self.head + self.len) % RING_BYTES] = byte;
+            self.len += 1;
+        }
+    }
+
+    fn end(&self) -> u64 { self.dropped + self.len as u64 }
+
+    /// Whole lines from position `from` up to `to` and at most `max` bytes (lines since dropped
+    /// are skipped), and the position after them.
+    fn read(&self, from: u64, to: u64, max: usize, out: &mut String) -> u64 {
+        let from = from.max(self.dropped);
+        let available = to.min(self.end()).saturating_sub(from) as usize;
+        let start = (from - self.dropped) as usize;
+        let mut taken = 0;
+        let mut bytes = Vec::with_capacity(available.min(max));
+        for i in 0..available.min(max) {
+            let byte = self.buffer[(self.head + start + i) % RING_BYTES];
+            bytes.push(byte);
+            if byte == b'\n' { taken = i + 1; }
+        }
+        bytes.truncate(taken);
+        out.push_str(&String::from_utf8_lossy(&bytes));
+        from + taken as u64
+    }
+}
+
+static RING: std::sync::Mutex<Ring> = std::sync::Mutex::new(Ring {
+    buffer: Vec::new(), head: 0, len: 0, dropped: 0, pending: String::new(), backlog: None,
+});
 
 struct Tee;
 
@@ -126,16 +178,11 @@ impl log::Log for Tee {
             line.truncate(end);
         }
         if let Ok(mut ring) = RING.try_lock() {
-            ring.bytes += line.len();
-            while ring.bytes > RING_BYTES {
-                let Some(old) = ring.lines.pop_front() else { break };
-                ring.bytes -= old.len();
-            }
-            if ring.pending.len() < 4096 {
+            ring.push(&line);
+            if ring.pending.len() < PENDING_BYTES {
                 ring.pending.push_str(&line);
                 ring.pending.push('\n');
             }
-            ring.lines.push_back(line);
         }
     }
 
@@ -145,6 +192,12 @@ impl log::Log for Tee {
 static TEE: Tee = Tee;
 
 pub fn init_logging() {
+    {
+        let mut ring = RING.lock().unwrap();
+        // First thing at boot, so these sit together at the start of the heap.
+        ring.buffer = vec![0; RING_BYTES];
+        ring.pending.reserve(PENDING_BYTES + 320);
+    }
     let _ = log::set_logger(&TEE);
     log::set_max_level(log::LevelFilter::Info);
 }
@@ -191,7 +244,7 @@ impl Control {
             if let Some(rest) = text.strip_prefix("profiles ") { return profiles::enqueue(rest.trim()); }
             // Commands can block briefly (NVS, a key press): run them off the Bluetooth host task.
             let remote = commander.clone();
-            let _ = std::thread::Builder::new().stack_size(6144).spawn(move || run(&remote, &text, Some(handle)));
+            let _ = crate::memory::spawn(c"command", 6144, move || run(&remote, &text, Some(handle)));
         });
         let updater = Updater::start(update.clone());
         let _ = UPDATER.set(updater.clone());
@@ -199,17 +252,17 @@ impl Control {
         Self { status, changed, log, remote: remote.clone() }
     }
 
-    /// Notifies new log text, keeps the dongle discoverable. Runs forever on its own thread.
-    pub fn spawn(self) {
-        std::thread::Builder::new()
-            .name("control".into())
-            .stack_size(6144)
-            .spawn(move || {
+    /// Notifies new log text, keeps the dongle discoverable, and calls `at_30s` once, half a
+    /// minute after it starts. Runs forever on its own thread.
+    pub fn spawn(self, at_30s: fn()) {
+        crate::memory::spawn(c"control", 6144, move || {
                 let mut ticks = 0u32;
                 let (mut last, mut nudged) = (String::new(), 0u32);
+                let mut text = String::with_capacity(PENDING_BYTES + 320);
                 loop {
                     std::thread::sleep(Duration::from_millis(250));
                     ticks += 1;
+                    if ticks == 120 { at_30s(); }
                     if ticks % 8 == 0 { self.remote.keep_discoverable(); self.remote.tune_links(); }
                     if ticks % 4 == 0 {
                         let json = status_json(&self.remote, APP_HANDLE.load(Ordering::SeqCst));
@@ -226,19 +279,25 @@ impl Control {
                             for (handle, ..) in self.remote.hosts() { let _ = changed.notify_with(b"?", handle); }
                         }
                     }
-                    let text = {
+                    // The backlog goes a piece at a time (4 KB per tick, not one 12 KB string), then
+                    // what was logged meanwhile.
+                    text.clear();
+                    {
                         let mut ring = RING.lock().unwrap();
-                        if ring.backlog_requested {
-                            ring.backlog_requested = false;
-                            ring.pending.clear();
-                            let mut all: String = ring.lines.iter().map(|line| format!("{line}\n")).collect();
-                            all.insert_str(0, "--- backlog ---\n");
-                            all.push_str("--- live ---\n");
-                            all
-                        } else {
-                            std::mem::take(&mut ring.pending)
+                        match ring.backlog {
+                            Some((from, to)) => {
+                                if from == 0 { text.push_str("--- backlog ---\n"); }
+                                let next = ring.read(from, to, PENDING_BYTES, &mut text);
+                                if next >= to.min(ring.end()) || next == from.max(ring.dropped) {
+                                    ring.backlog = None;
+                                    text.push_str("--- live ---\n");
+                                } else {
+                                    ring.backlog = Some((next, to));
+                                }
+                            }
+                            None => std::mem::swap(&mut ring.pending, &mut text),
                         }
-                    };
+                    }
                     if text.is_empty() || self.log.lock().subscribed_count() == 0 { continue; }
                     // 180 bytes fits every iPhone's MTU (185+).
                     let mut rest = text.as_str();
@@ -479,7 +538,11 @@ pub fn run(remote: &Remote, line: &str, from: Option<u16>) {
             flag.store(on, Ordering::SeqCst);
             info!("POWER: {rest} ({})", if on { "forced on for a measurement" } else { "as gestures need it" });
         }
-        "logs" => RING.lock().unwrap().backlog_requested = true,
+        "logs" => {
+            let mut ring = RING.lock().unwrap();
+            ring.pending.clear();
+            ring.backlog = Some((0, ring.end()));
+        }
         "status" => info!("STATUS {}", status_json(remote, from.unwrap_or(0))),
         "reboot" => {
             info!("CONTROL: rebooting");

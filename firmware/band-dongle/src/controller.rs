@@ -44,6 +44,8 @@ impl VolumeKnob {
 /// A pinch held (the band's own "hold") and let go within this long, without turning the dial,
 /// is `index.hold` (usually the letter menu). Needs no wrist motion, unlike the dial.
 const SWITCH_HOLD_MAX: f64 = 3.0;
+/// Pulses waiting to be sent to the band: four patterns of `PATTERN_MAX_STEPS`.
+const HAPTICS_QUEUED: usize = 4 * np_profiles::PATTERN_MAX_STEPS;
 /// How long the letter menu waits for a letter once handwriting is asked for (the band takes a
 /// moment to start).
 const MENU_WINDOW: f64 = 6.0;
@@ -218,6 +220,8 @@ impl<'a> Controller<'a> {
     /// Plays a pattern from `start`, its pulses in time order among what's queued.
     fn play(&mut self, start: f64, pattern: &[np_profiles::Pulse]) {
         for pulse in pattern {
+            // A band that stops taking haptics mustn't let a ringing call queue them forever.
+            if self.haptics.len() >= HAPTICS_QUEUED { break; }
             let at = start + f64::from(pulse.at_ms) / 1000.0;
             let command = HapticsCommand::Vibrate { duration_ms: u64::from(pulse.ms), amplitude: pulse.amplitude() };
             let index = self.haptics.iter().position(|(due, _)| *due > at).unwrap_or(self.haptics.len());

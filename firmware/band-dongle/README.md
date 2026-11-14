@@ -127,6 +127,12 @@ and `tv`, which do what the modes below always did.
 - **Phone calls on an iPhone (v0.14):** the dongle reads the iPhone's notifications (Apple's ANCS,
   the way a watch does), so a ringing call buzzes the band (two long pulses every 3 s) and
   `call:answer` / `call:end` answer, decline or hang up. iOS asks once to share notifications.
+- **Memory (v0.15.1):** it no longer runs out while the band streams wrist motion (a pinch, the
+  gesture lab): one record of motion was hundreds of events in one 22–45 KB allocation, and every
+  buffer from the band is now bounded (a band that floods the dongle is reconnected instead).
+  Lowest free heap 63 → 137 KB, largest free block 31 → 90 KB; the log's `memory:` lines show
+  where it goes (pools, each task's unused stack), and `make capture-cmd C='...'` sends a command
+  through a running capture without resetting the dongle.
 
 ## The letter menu (v0.8; letters from the profile set since v0.11)
 

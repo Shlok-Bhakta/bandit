@@ -13,6 +13,7 @@ mod ancs;
 mod coc;
 mod control;
 mod controller;
+mod memory;
 mod ota;
 mod profiles;
 mod remote;
@@ -58,9 +59,7 @@ fn watch_boot_button(remote: Remote) {
         };
         esp_idf_svc::sys::gpio_config(&config);
     }
-    std::thread::Builder::new()
-        .stack_size(4096)
-        .spawn(move || {
+    memory::spawn(c"button", 3072, move || {
             let mut pressed: Option<Instant> = None;
             let mut long_handled = false;
             loop {
@@ -93,15 +92,14 @@ fn fingerprint(identity: &EnrollmentIdentity) -> String {
     digest[..8].chunks(2).map(|pair| format!("{:02X}{:02X}", pair[0], pair[1])).collect::<Vec<_>>().join("-")
 }
 
-/// The self-test, half a minute after boot at the main task's priority: off the path to connecting
-/// the band (its key exchanges and signatures take a while).
+/// The self-test, at the main task's priority, half a minute after boot (the control thread starts
+/// it): off the path to connecting the band (its key exchanges and signatures take a while), and
+/// its stack is taken only while it runs. It used 10.7 KB of it (0.15.1).
 fn spawn_self_test() {
-    let _ = esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration { name: Some(c"self-test"), stack_size: 24 * 1024, priority: 1, ..Default::default() }.set();
-    let spawned = std::thread::Builder::new().stack_size(24 * 1024).spawn(|| {
-        std::thread::sleep(Duration::from_secs(30));
+    let spawned = memory::spawn_with(c"self-test", 14 * 1024, Some(1), || {
         if let Err(error) = self_test() { error!("SELF-TEST FAIL: {error}"); }
+        info!("self-test: {} B of its stack unused", memory::own_stack_unused());
     });
-    let _ = esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration::default().set();
     if let Err(error) = spawned { warn!("Couldn't start the self-test: {error}"); }
 }
 
@@ -152,9 +150,8 @@ fn spawn_serial_reader(partition: EspDefaultNvsPartition, remote: Remote) {
         esp_idf_svc::sys::usb_serial_jtag_driver_install(&mut config);
         esp_idf_svc::sys::esp_vfs_usb_serial_jtag_use_driver();
     }
-    std::thread::Builder::new()
-        .stack_size(12288)
-        .spawn(move || {
+    // It used under 2 KB of 12 (0.15.1); `OWNER` derives a public key, a few KB more.
+    memory::spawn(c"serial", 8192, move || {
             let mut nvs = match EspNvs::new(partition, "np", true) {
                 Ok(nvs) => nvs,
                 Err(error) => { error!("serial: NVS unavailable: {error}"); return; }
@@ -453,7 +450,12 @@ async fn stream_session(channel: &coc::Channel, identity: &EnrollmentIdentity, r
     let mut last_traffic = now();
     let mut last_status_query = 0.0;
     let mut last_report = -100.0;
+    let mut reports = 0u32;
+    // The most events one SDU made, and its size, since the last report.
+    let mut burst = (0usize, 0usize);
+    let mut slowest = Duration::ZERO;
     loop {
+        let round = Instant::now();
         let mut outgoing = Vec::new();
         let received = channel.take();
         if received.is_empty() {
@@ -462,14 +464,27 @@ async fn stream_session(channel: &coc::Channel, identity: &EnrollmentIdentity, r
         for sdu in received {
             last_traffic = now();
             let feeding = Instant::now();
-            let result = session.feed(&sdu, now()).map_err(|e| anyhow::anyhow!("session: {e}"))?;
-            if !outcome.live { timeline.core += feeding.elapsed(); }
-            outgoing.extend(result.outgoing);
-            let hand = session.hand();
-            for event in result.events {
-                if matches!(event, Event::BatteryStatus(Some(_))) { controller.battery_detail = session.battery_detail(); }
-                controller.event(event, now(), hand);
+            // Events go to the controller as they're decoded: one record of motion is hundreds.
+            let mut hand = session.hand();
+            let (mut battery, mut events) = (None, 0usize);
+            let bytes = session.feed_into(&sdu, now(), &mut |event| {
+                events += 1;
+                match event {
+                    // Its detail is read from the session once the feed is done.
+                    Event::BatteryStatus(Some(_)) => battery = Some(event),
+                    event => {
+                        match &event { Event::Handedness(h) => hand = Some(*h), Event::HandednessFailure(_) => hand = None, _ => {} }
+                        controller.event(event, now(), hand);
+                    }
+                }
+            }).map_err(|e| anyhow::anyhow!("session: {e}"))?;
+            if let Some(event) = battery {
+                controller.battery_detail = session.battery_detail();
+                controller.event(event, now(), session.hand());
             }
+            if !outcome.live { timeline.core += feeding.elapsed(); }
+            outgoing.extend(bytes);
+            if events > burst.0 { burst = (events, sdu.len()); }
         }
         if !outcome.live && session.streams_enabled() {
             outcome.live = true;
@@ -498,6 +513,9 @@ async fn stream_session(channel: &coc::Channel, identity: &EnrollmentIdentity, r
             if !bytes.is_empty() { let _ = channel.send(&bytes); }
             anyhow::bail!("released the band (BOOT button)");
         }
+        if channel.overflowed() {
+            anyhow::bail!("the band sent more than the dongle could hold before reading it; reconnecting");
+        }
         if !channel.is_open() {
             anyhow::bail!("the band closed the L2CAP channel");
         }
@@ -505,20 +523,25 @@ async fn stream_session(channel: &coc::Channel, identity: &EnrollmentIdentity, r
             anyhow::bail!("no traffic from the band for {QUIET_LOST} s (status queries unanswered)");
         }
         if !outgoing.is_empty() { channel.send(&outgoing)?; }
+        slowest = slowest.max(round.elapsed());
         if session.streams_enabled() && now() - last_report >= 30.0 {
             last_report = now();
             let (sdus, bytes) = channel.stats();
             let hosts: Vec<String> = remote.hosts().iter().map(|host| format!("{} {}", host.0, link_params(host.0))).collect();
             info!("links to hosts: {}", hosts.join(", "));
-            let (largest, lowest) = unsafe {
-                (esp_idf_svc::sys::heap_caps_get_largest_free_block(esp_idf_svc::sys::MALLOC_CAP_8BIT),
-                 esp_idf_svc::sys::heap_caps_get_minimum_free_size(esp_idf_svc::sys::MALLOC_CAP_8BIT))
-            };
-            info!("memory: largest free block {largest} B, lowest free since boot {lowest} B");
-            info!("streaming: {} packets ({sdus} SDUs, {bytes} B), {} gyro, {} gestures, motion {}, writing {}, hand {:?}, link {}, heap {} B",
-                  session.authenticated_packets(), controller.motion, controller.gestures,
+            info!("memory: {}", memory::summary());
+            // The pools and stacks sdkconfig.defaults and the threads were sized by: at first, then every 10 minutes.
+            if reports % 20 <= 1 {
+                info!("memory: pools {}", memory::pools());
+                info!("memory: stack unused {}", memory::stacks());
+            }
+            reports += 1;
+            info!("streaming: {} packets ({sdus} SDUs, {bytes} B, at most {} events from one of {} B, {} B waiting, {} ms a round), {} gyro, {} gestures, motion {}, writing {}, hand {:?}, link {}",
+                  session.authenticated_packets(), burst.0, burst.1, channel.take_peak(), slowest.as_millis(), controller.motion, controller.gestures,
                   if session.motion_on() { "on" } else { "off" }, if session.band_writing() { "on" } else { "off" }, session.hand(),
-                  link_params(conn_handle), unsafe { esp_idf_svc::sys::esp_get_free_heap_size() });
+                  link_params(conn_handle));
+            burst = (0, 0);
+            slowest = Duration::ZERO;
         }
     }
 }
@@ -529,22 +552,32 @@ fn main() -> anyhow::Result<()> {
     info!("band-dongle v{} (band-core 4b59393 vendored, own L2CAP layer): several hosts, slides, Teams, control service, OTA",
           env!("CARGO_PKG_VERSION"));
 
+    // What each step of starting up takes from the heap, logged once it's done.
+    let mut marks = vec![("start", memory::free())];
+    let mut mark = |step| marks.push((step, memory::free()));
     let partition = EspDefaultNvsPartition::take()?;
     let nvs = EspNvs::new(partition.clone(), "np", true)?;
+    mark("NVS");
     let device = BLEDevice::take();
     device.security().set_auth(AuthReq::Bond | AuthReq::Sc).set_io_cap(SecurityIOCap::NoInputNoOutput).resolve_rpa();
     let mut client = device.new_client();
     let mut band_address = saved_band(&nvs).or_else(|| adopt_band(&nvs, device));
+    mark("Bluetooth");
     profiles::load(&nvs);
+    mark("profiles");
     let remote = Remote::new(EspNvs::new(partition.clone(), "np", true)?, band_address)?;
+    mark("HID");
     let control = control::Control::new(&remote);
     remote.advertise(control::SERVICE)?;
-    control.spawn();
+    mark("control service");
+    control.spawn(spawn_self_test);
     announce_gatt_changes(&nvs);
     ota::confirm_after_probation();
     spawn_serial_reader(partition, remote.clone());
     watch_boot_button(remote.clone());
-    spawn_self_test();
+    mark("threads");
+    let steps: Vec<String> = marks.windows(2).map(|pair| format!("{} {} B", pair[1].0, pair[0].1 as isize - pair[1].1 as isize)).collect();
+    info!("memory at boot: {} B free at start; {}; {} B free now", marks[0].1, steps.join(", "), memory::free());
     let mut encryption_failures = 0;
     let mut failures = 0;
 

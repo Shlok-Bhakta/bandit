@@ -6,7 +6,10 @@
 //! and drops SDUs when its 1-slot queue is full.
 //!
 //! Here the pool is allocated once and never freed, received SDUs are copied out in full (the whole
-//! mbuf chain) into an unbounded queue, and the chain is freed immediately.
+//! mbuf chain) into a queue, and the chain is freed immediately. The queue is bounded: a band
+//! sending faster than the dongle reads ends the channel (and the session, which reconnects)
+//! instead of the heap. NimBLE can't hold the band back: an SDU it has credits for and no buffer
+//! armed for drops the link anyway.
 
 use std::collections::VecDeque;
 use std::ffi::c_void;
@@ -16,7 +19,13 @@ use std::time::{Duration, Instant};
 use esp_idf_svc::sys;
 
 pub const MTU: u16 = 1024;
-const BLOCKS: u16 = 24;
+/// One SDU fits a block. In use at once: the receive buffer armed, the one being copied out, and
+/// what's being sent (one at a time): 2 of 8 at most (0.15.1); the log's `np_coc` min free shows
+/// the slack.
+const BLOCKS: u16 = 5;
+/// Received bytes waiting for the session: a few hundred normally; motion streams ~9 KB/s and
+/// starts with a burst, so this is seconds of the loop being held up.
+const RX_LIMIT: usize = 32 * 1024;
 /// Payload plus room for the mbuf and packet headers.
 const BLOCK_SIZE: usize = MTU as usize + 64;
 
@@ -39,6 +48,11 @@ struct State {
     disconnected: bool,
     stalled: bool,
     rx: VecDeque<Vec<u8>>,
+    /// Bytes in `rx`, and the most there were since `take_peak`.
+    rx_queued: usize,
+    rx_peak: usize,
+    /// `rx` outgrew `RX_LIMIT` and the channel was closed.
+    overflowed: bool,
     rx_bytes: usize,
     rx_sdus: usize,
 }
@@ -49,6 +63,9 @@ static STATE: Mutex<State> = Mutex::new(State {
     disconnected: false,
     stalled: false,
     rx: VecDeque::new(),
+    rx_queued: 0,
+    rx_peak: 0,
+    overflowed: false,
     rx_bytes: 0,
     rx_sdus: 0,
 });
@@ -114,6 +131,14 @@ extern "C" fn on_event(event: *mut sys::ble_l2cap_event, _arg: *mut c_void) -> i
             let receive = unsafe { event.__bindgen_anon_1.receive };
             if !receive.sdu_rx.is_null() {
                 let length = chain_len(receive.sdu_rx);
+                if state.overflowed || state.rx_queued + length > RX_LIMIT {
+                    unsafe { sys::os_mbuf_free_chain(receive.sdu_rx) };
+                    if !state.overflowed {
+                        state.overflowed = true;
+                        unsafe { sys::ble_l2cap_disconnect(receive.chan) };
+                    }
+                    return 0;
+                }
                 let mut data = vec![0u8; length];
                 unsafe {
                     sys::os_mbuf_copydata(receive.sdu_rx, 0, length as i32, data.as_mut_ptr() as *mut c_void);
@@ -121,6 +146,8 @@ extern "C" fn on_event(event: *mut sys::ble_l2cap_event, _arg: *mut c_void) -> i
                 }
                 state.rx_bytes += length;
                 state.rx_sdus += 1;
+                state.rx_queued += length;
+                state.rx_peak = state.rx_peak.max(state.rx_queued);
                 state.rx.push_back(data);
             }
             drop(state);
@@ -165,7 +192,17 @@ impl Channel {
     pub fn is_open(&self) -> bool { STATE.lock().unwrap().chan != 0 }
 
     /// Everything received since the last call, in order.
-    pub fn take(&self) -> Vec<Vec<u8>> { STATE.lock().unwrap().rx.drain(..).collect() }
+    pub fn take(&self) -> VecDeque<Vec<u8>> {
+        let mut state = STATE.lock().unwrap();
+        state.rx_queued = 0;
+        std::mem::take(&mut state.rx)
+    }
+
+    /// The most bytes that waited to be read since the last call.
+    pub fn take_peak(&self) -> usize { std::mem::take(&mut STATE.lock().unwrap().rx_peak) }
+
+    /// The band sent more than `RX_LIMIT` before the session read it, so the channel was closed.
+    pub fn overflowed(&self) -> bool { STATE.lock().unwrap().overflowed }
 
     pub fn stats(&self) -> (usize, usize) {
         let state = STATE.lock().unwrap();

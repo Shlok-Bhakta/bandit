@@ -21,8 +21,13 @@ CONFIG_BT_NIMBLE_SM_SC=y
 CONFIG_BT_NIMBLE_MAX_BONDS=12
 CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM=2
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256
-CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=32
+# Buffer pools, from the log's `memory: pools` min free (0.15.1, phone and band connected): msys
+# 2 of 56 used, events 3 of 30. (ACL from the controller stays 24: one that finds none free is
+# dropped, and the band's motion arrives in bursts.)
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=16
 CONFIG_BT_NIMBLE_MSYS_1_BLOCK_SIZE=320
+CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=8
+CONFIG_BT_NIMBLE_TRANSPORT_EVT_COUNT=16
 
 # Over-the-air updates: a fresh image runs on probation and the bootloader rolls back to the
 # previous slot if it reboots before the image confirms itself (see ota.rs).
@@ -37,3 +42,6 @@ CONFIG_BT_NIMBLE_MAX_CCCDS=96
 # NimBLE's info level logs three lines for every notification sent (each air-mouse move), in the
 # sender's task: it slowed the band's loop until its receive buffer outgrew the heap.
 CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
+
+# Every task's unused stack, for the log's `memory: stack unused` line (memory.rs).
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y

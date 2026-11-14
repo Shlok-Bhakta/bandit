@@ -3,7 +3,7 @@
 //! `profiles show` logs it back; they run in order on one worker (`enqueue`), unlike other
 //! commands, which each get a thread of their own.
 
-use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use base64::Engine;
@@ -27,7 +27,7 @@ static CURRENT: RwLock<Option<Current>> = RwLock::new(None);
 static ERROR: Mutex<Option<String>> = Mutex::new(None);
 static UPLOAD: Mutex<Option<Upload>> = Mutex::new(None);
 
-static QUEUE: OnceLock<SyncSender<String>> = OnceLock::new();
+static QUEUE: Mutex<Option<SyncSender<String>>> = Mutex::new(None);
 
 struct Upload {
     bytes: Vec<u8>,
@@ -36,27 +36,50 @@ struct Upload {
     sha8: String,
 }
 
-/// Starts the worker that runs `profiles …` commands one at a time, in the order they arrive
+/// Keeps what the worker needs: `profiles …` commands run one at a time, in the order they arrive
 /// (checking a whole file needs more stack than a command thread has).
-pub fn start(remote: Remote) {
+pub fn start(remote: Remote) { let _ = REMOTE.set(remote); }
+
+static REMOTE: OnceLock<Remote> = OnceLock::new();
+
+/// Queues `rest` of a `profiles …` command for the worker; call it where commands arrive, so
+/// their order is kept. The worker runs only while there are commands: it starts with the first
+/// and ends after `IDLE` without one. Checking a file took 4.9 KB of stack (0.15.1, 5 deep; np-profiles
+/// refuses files over 12 deep before parsing, and 120 deep once overflowed 24 KB).
+pub fn enqueue(rest: &str) {
+    let mut queue = QUEUE.lock().unwrap();
+    if let Some(sender) = queue.as_ref() {
+        match sender.try_send(rest.to_string()) {
+            Ok(()) => return,
+            Err(TrySendError::Full(_)) => return refuse("too many profile commands at once".into()),
+            Err(TrySendError::Disconnected(_)) => *queue = None,
+        }
+    }
+    let Some(remote) = REMOTE.get().cloned() else { return refuse("not ready".into()) };
     let (sender, receiver) = sync_channel::<String>(64);
-    let spawned = std::thread::Builder::new().name("profiles".into()).stack_size(24 * 1024).spawn(move || {
-        for line in receiver { command(&remote, &line); }
+    let _ = sender.try_send(rest.to_string());
+    let spawned = crate::memory::spawn(c"profiles", 12 * 1024, move || loop {
+        match receiver.recv_timeout(IDLE) {
+            Ok(line) => command(&remote, &line),
+            Err(_) => {
+                // Gone only with nothing queued: `enqueue` sends under this lock.
+                let mut queue = QUEUE.lock().unwrap();
+                if let Ok(line) = receiver.try_recv() { drop(queue); command(&remote, &line); continue; }
+                *queue = None;
+                drop(queue);
+                info!("PROFILES: worker idle, ending ({} B of its stack never used)", crate::memory::own_stack_unused());
+                return;
+            }
+        }
     });
     match spawned {
-        Ok(_) => { let _ = QUEUE.set(sender); }
-        Err(error) => warn!("PROFILES: couldn't start ({error}); uploads won't work"),
+        Ok(_) => *queue = Some(sender),
+        Err(error) => refuse(format!("couldn't start ({error})")),
     }
 }
 
-/// Queues `rest` of a `profiles …` command for the worker; call it where commands arrive, so
-/// their order is kept.
-pub fn enqueue(rest: &str) {
-    match QUEUE.get() {
-        Some(queue) => if queue.try_send(rest.to_string()).is_err() { refuse("too many profile commands at once".into()) },
-        None => refuse("not ready".into()),
-    }
-}
+/// How long the worker waits for another command before it ends.
+const IDLE: std::time::Duration = std::time::Duration::from_secs(20);
 
 fn sha8(bytes: &[u8]) -> String { Sha256::digest(bytes)[..4].iter().map(|b| format!("{b:02x}")).collect() }
 

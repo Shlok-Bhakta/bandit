@@ -75,10 +75,7 @@ impl Updater {
         // memory whatever the chunk size.
         let (sender, receiver) = sync_channel(96);
         let queued = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        std::thread::Builder::new()
-            .name("ota".into())
-            .stack_size(8192)
-            .spawn({ let queued = queued.clone(); move || worker(receiver, characteristic, queued) })
+        crate::memory::spawn(c"ota", 8192, { let queued = queued.clone(); move || worker(receiver, characteristic, queued) })
             .expect("ota thread");
         Self { sender, queued }
     }
@@ -318,9 +315,7 @@ pub fn confirm_after_probation() {
         return;
     }
     warn!("UPDATE: running a new image from {slot} on probation; it confirms itself in {} s", PROBATION.as_secs());
-    std::thread::Builder::new()
-        .stack_size(4096)
-        .spawn(|| {
+    crate::memory::spawn(c"probation", 4096, || {
             std::thread::sleep(PROBATION);
             let rc = unsafe { sys::esp_ota_mark_app_valid_cancel_rollback() };
             CONFIRMED.store(true, std::sync::atomic::Ordering::SeqCst);
