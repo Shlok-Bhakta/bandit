@@ -42,7 +42,7 @@ tool = $(PY) -I tools/$(1) $(PORT) $(2)
 TOOLS_READY =
 endif
 
-.PHONY: help setup remote-setup remote-sync build flash release serve serve-status log status cmd power connect-bench profiles-get profiles-put ota-test ota-tamper-test clean distclean
+.PHONY: help setup remote-setup remote-sync build flash release serve serve-status log capture capture-stop crashes status cmd power connect-bench profiles-get profiles-put ota-test ota-tamper-test clean distclean
 
 help:
 	@echo "make setup                 install the Rust ESP toolchain (espup), espflash and ldproxy"
@@ -52,6 +52,8 @@ help:
 	@echo "make release NOTES='...'   build, sign and publish to ../dist (Tailscale /dongle) for the app's update button"
 	@echo "make serve                 serve ../dist to your tailnet at /dongle (launchd + tailscale serve); serve-status checks it"
 	@echo "make log [SECS=30]         print the dongle's log"
+	@echo "make capture               keep the port open on REMOTE and log everything to ~/np-dongle/logs (crash hunting; stop it before flash/log/cmd)"
+	@echo "make capture-stop          stop it; make crashes [N=40] shows the crash log's tail"
 	@echo "make status [WAIT=25]      print the dongle's status JSON (after WAIT s: opening the port resets it)"
 	@echo "make cmd C='key playpause' send a control command (CONTROL.md) over serial"
 	@echo "make power PHASES='auto:60 motion:60'   measure the band's battery and radio per state (target/power/)"
@@ -111,6 +113,19 @@ serve-status:
 
 log: $(TOOLS_READY)
 	$(call tool,serial_console.py,$(SECS))
+
+# Opening the port resets the dongle, so a capture opens it once and holds it: a reset it logs is the dongle's own.
+capture:
+	@test -n "$(REMOTE)" || { echo "capture runs on REMOTE (config.mk)"; exit 1; }
+	@$(MAKE) -s remote-sync
+	@ssh $(REMOTE) 'pgrep -f "tools/[l]og_capture.py" >/dev/null && echo "already capturing" || { setsid nohup $(REMOTE_DIR)/run log_capture.py >/dev/null 2>&1 < /dev/null & sleep 1; echo "capturing to ~/$(REMOTE_DIR)/logs"; }'
+
+capture-stop:
+	@ssh $(REMOTE) 'pkill -f "tools/[l]og_capture.py" && echo stopped || echo "not capturing"'
+
+N ?= 40
+crashes:
+	@ssh $(REMOTE) 'tail -n $(N) ~/$(REMOTE_DIR)/logs/crashes.log'
 
 # Opening the port resets the dongle: watch the hosts reconnect, then ask.
 status: $(TOOLS_READY)
