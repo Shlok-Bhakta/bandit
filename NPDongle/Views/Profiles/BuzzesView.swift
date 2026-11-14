@@ -138,8 +138,9 @@ struct BuzzDesignerView: View {
     private func step(_ index: Int, _ token: String) -> some View {
         let pause = token.hasPrefix("_")
         let parts = token.replacingOccurrences(of: "_", with: "").split(separator: "*")
-        let ms = Double(parts.first ?? "60") ?? 60
-        let strength = parts.count > 1 ? Double(parts[1]) ?? 70 : 70
+        // Bounded, so text being typed (like "nan") can't crash the sliders.
+        let ms = min(max(Double(parts.first ?? "60").flatMap { $0.isFinite ? $0 : nil } ?? 60, 20), pause ? 3000 : 2000)
+        let strength = min(max(parts.count > 1 ? Double(parts[1]).flatMap { $0.isFinite ? $0 : nil } ?? 70 : 70, 1), 100)
         func change(_ duration: Double, _ power: Double) {
             var next = tokens
             guard next.indices.contains(index) else { return }

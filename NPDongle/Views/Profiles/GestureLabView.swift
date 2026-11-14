@@ -53,12 +53,14 @@ struct GestureLabView: View {
                     }.padding(.vertical, 4)
                 }
             }
-            Section("Wrist motion") {
+            Section {
                 ForEach(Array(records.filter { if case .motion = $0 { return true }; return false }.suffix(30).reversed().enumerated()), id: \.offset) { _, record in
                     if case .motion(let flick, let direction, let peak) = record {
-                        Label("\(flick ? "Flick" : "Below threshold") \(direction) · \(peak)", systemImage: flick ? "bolt.fill" : "waveform.path").font(.callout).foregroundStyle(flick ? Theme.mint : .secondary)
+                        Label("\(flick ? "Flick" : "Swing") \(direction) · \(peak) °/s", systemImage: flick ? "bolt.fill" : "waveform.path").font(.callout).foregroundStyle(flick ? Theme.mint : .secondary)
                     }
                 }
+            } header: { Text("Wrist motion") } footer: {
+                Text("Each swing during a pinch, at its fastest. Over 150 °/s and mostly one way is a flick, in a profile that binds flicks.")
             }
             Section {
                 DisclosureGroup("Bindings that fired") {

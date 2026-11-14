@@ -60,7 +60,8 @@ extension ProfileFormat {
             return Int(n)
         }
         if text.utf8.count > 120 { throw fail("a pattern is at most 120 characters") }
-        let tokens = text.split { $0.isASCII && [" ", "\t", "\n", "\r", "\u{0C}"].contains($0) }
+        // By scalar, as Rust's split_ascii_whitespace: "\r\n" is one Character.
+        let tokens = text.unicodeScalars.split { [" ", "\t", "\n", "\r", "\u{0C}"].contains($0) }.map { Substring(String($0)) }
         if tokens.isEmpty { throw fail(how) }
         if tokens.count > 16 { throw fail("at most 16 pulses and pauses") }
         var pulses: [Pulse] = []

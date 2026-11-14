@@ -58,9 +58,17 @@ struct ProfileEditorView: View {
                 }
             }
             Section {
-                NavigationLink { BandEventsView(uid: uid) } label: { Label("Band events (experimental)", systemImage: "waveform.path") }
+                ForEach(ProfileGesture.band.filter { profile.wrappedValue[$0] != nil }, id: \.self) { gesture in
+                    NavigationLink {
+                        BindingEditorView(uid: uid, gesture: gesture)
+                    } label: {
+                        GestureRow(gesture: gesture, binding: profile.wrappedValue[gesture],
+                                   broken: problem(index)?.path.hasPrefix("profiles[\(index)].gestures.\(gesture.rawValue)") == true)
+                    }
+                }
+                NavigationLink { BandEventsView(uid: uid) } label: { Label("Bind a band event…", systemImage: "plus.circle") }
                 FirmwareFeatureNote()
-            }
+            } header: { Text("Band events (experimental)") }
             Section {
                 TextField("Name", text: profile.name)
                 if profile.wrappedValue.name.unicodeScalars.count > 24 {
@@ -191,7 +199,7 @@ struct ProfileEditorView: View {
             } header: {
                 Text("Unknown gestures")
             } footer: {
-                Text("The dongle doesn't know these names. See the reference for the 14 gestures.")
+                Text("The dongle doesn't know these names. See the reference for the gestures it knows.")
             }
         }
     }

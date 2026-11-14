@@ -24,6 +24,7 @@ struct ProfilesView: View {
                 ValidationRow(error: store.validation, size: store.size)
                 if let error = store.saveError { Text(error).font(.footnote).foregroundStyle(Theme.danger) }
             }
+            sendSection
             Section {
                 ForEach(store.set.profiles, id: \.uid) { profile in
                     NavigationLink(value: ProfileRoute.profile(profile.uid)) {
@@ -65,7 +66,6 @@ struct ProfilesView: View {
             Section("Discover") {
                 NavigationLink { GestureLabView() } label: { Label("Gesture lab", systemImage: "waveform.path") }
             }
-            sendSection
             fileSection
         }
         .darkList()

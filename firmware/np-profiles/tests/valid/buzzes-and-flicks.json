@@ -5,7 +5,8 @@
   "buzzes": {
     "zap": "40*100 _60 40*100",
     "done": "120 _80 120 _80 300*95",
-    "slow": "2000*10"
+    "slow": "2000*10",
+    "crlf": "60\r\n_100\r\n60"
   },
   "feedback": {
     "alert.question": "zap",
