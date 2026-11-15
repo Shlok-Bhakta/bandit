@@ -151,8 +151,11 @@ public enum MediaKey: String, CaseIterable, Sendable {
     case playPause, next, previous, volumeUp, volumeDown, mute, voice
 }
 
-public enum MouseButton: String, Sendable {
+/// Buttons 4–8: back and forward on a computer (4, 5); on an iPhone, AssistiveTouch gives each one
+/// an action of your choice (firmware 0.16).
+public enum MouseButton: String, CaseIterable, Sendable {
     case left = "click", right = "rightClick", middle = "middleClick"
+    case button4, button5, button6, button7, button8
 }
 
 /// A key with modifiers as HID usages (keyboard page 0x07). `cmd` is GUI: the dongle sends it as
@@ -576,7 +579,9 @@ extension ProfileFormat {
             case "middleClick" where count.isEmpty: return .click(.middle)
             case "scrollUp": return .scroll(steps)
             case "scrollDown": return .scroll(-steps)
-            default: throw fail("unknown mouse action \"\(arg)\" (click, rightClick, middleClick, scrollUp[:n], scrollDown[:n])")
+            case let button where count.isEmpty && button.hasPrefix("button") && MouseButton(rawValue: button) != nil:
+                return .click(MouseButton(rawValue: button)!)
+            default: throw fail("unknown mouse action \"\(arg)\" (click, rightClick, middleClick, button4–button8, scrollUp[:n], scrollDown[:n])")
             }
         case "profile":
             switch arg {

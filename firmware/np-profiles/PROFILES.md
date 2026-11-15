@@ -80,7 +80,7 @@ earlier firmware did.
 | `buzz` | optional | Played when you switch to it, so you can tell where you landed: 1–4 short buzzes (default 1), or a pattern's name (`"rise"`) |
 | `hosts` | optional | Who may use it: any of `phone`, `computer`, `mac`, `windows`, `linux`, `tv`. Default: everyone. Switching a host to a profile it can't use gets one long buzz |
 | `typing` | optional | The band's handwriting is typed on the computer. The model sleeps after 90 s with nothing written; any gesture in this profile wakes it |
-| `pointer` | optional | Pinch, hold and move the wrist moves the mouse pointer (computers). The dial is off while pointing |
+| `pointer` | optional | Pinch, hold and move the wrist moves the mouse pointer (computers; an iPhone with AssistiveTouch on, firmware 0.16). The dial and flicks are off where it points |
 | `gestures` | optional | Gesture → action, below |
 | `apps` | optional | Up to 16 Mac apps by bundle id (`com.google.Chrome`): a computer switches to this profile while one is in front (below). Each 1–64 of `A`–`Z`, `a`–`z`, `0`–`9`, `.`, `_`, `-`; an app in one profile only; only in a profile for computers |
 
@@ -106,7 +106,7 @@ profiles take about 2.5 KB.
 **Flicks** need wrist motion, so the first flick of a pinch waits for it to start (a moment), and
 the motion stays on for 30 s after a pinch in a profile with flicks. A flick back the other way
 right after one isn't a second flick. A pinch that flicked or turned isn't `index.hold` when it
-lets go. A `pointer` profile has no flicks on a computer: there the pinch moves the pointer.
+lets go. A `pointer` profile has no flicks on a computer or a phone: there the pinch moves the pointer.
 
 ### Band events (experimental)
 
@@ -154,8 +154,9 @@ when there's a default. Keys are `phone`, `computer`, `mac`, `windows`, `linux`,
 | `key:<chord>` | A key with modifiers, pressed and released: `key:enter`, `key:cmd+shift+m`, `key:ctrl+alt+delete`, `key:f5`, `key:]` | Computer, TV |
 | `hold:<chord>` | Pressed while `middle.hold` lasts (push-to-talk), released with the finger, or after 60 s | Computer, TV |
 | `type:<text>` | Types 1–64 printable ASCII characters (US layout) | Computer, TV |
-| `mouse:click` · `mouse:rightClick` · `mouse:middleClick` | Mouse buttons | Computer |
-| `mouse:scrollUp` · `mouse:scrollDown`, optionally `:<1–20>` | Wheel steps (default 4) | Computer |
+| `mouse:click` · `mouse:rightClick` · `mouse:middleClick` | Mouse buttons | Computer, iPhone (AssistiveTouch on; firmware 0.16) |
+| `mouse:button4` … `mouse:button8` | Extra mouse buttons. A computer: 4 is back, 5 forward. An iPhone with AssistiveTouch: give each one an action (Settings › Accessibility › Touch › AssistiveTouch › Devices: Home, App Switcher, Control Center, Notification Center, Screenshot, Lock Screen, Siri, a Shortcut...). Firmware 0.16 | Computer, iPhone |
+| `mouse:scrollUp` · `mouse:scrollDown`, optionally `:<1–20>` | Wheel steps (default 4) | Computer, iPhone |
 | `profile:<id>` · `profile:next` · `profile:previous` | Switch this host's profile (`next`/`previous` skip profiles it can't use) | |
 | `host:next` · `host:previous` | Send gestures to the next or previous connected host | |
 | `host:<kind>` | To the first connected host of a kind: `host:phone`, `host:computer`, `host:mac`, `host:tv`, … | |

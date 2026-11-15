@@ -333,7 +333,9 @@ impl Media {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Button { Left, Right, Middle }
+/// `Extra(4..=8)`: buttons 4–8. Back and forward on a computer (4, 5); on an iPhone, AssistiveTouch
+/// gives each one an action of your choice (Home, App Switcher, Control Center, a Shortcut...).
+pub enum Button { Left, Right, Middle, Extra(u8) }
 
 /// A phone call on an iPhone (its notifications' actions, through ANCS).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -421,7 +423,7 @@ pub struct Profile {
     pub hosts: Vec<Hosts>,
     /// The band's handwriting is typed (computers).
     pub typing: bool,
-    /// A pinch held and moved is the mouse pointer (computers); the dial is off.
+    /// A pinch held and moved is the mouse pointer (computers, and iPhones with AssistiveTouch); the dial is off.
     pub pointer: bool,
     pub gestures: BTreeMap<Gesture, Binding>,
     /// Computer apps (Mac bundle ids) that switch a computer to this profile while in front.
@@ -448,7 +450,7 @@ impl Profile {
         self.points(kind) || [Gesture::DialCw, Gesture::DialCcw].into_iter().any(|g| self.action(g, kind).is_some()) || self.flicks(kind)
     }
 
-    /// Whether flicks are bound here (a `pointer` profile on a computer has none: the pinch moves the pointer).
+    /// Whether flicks are bound here (a `pointer` profile has none where it points: the pinch moves the pointer).
     pub fn flicks(&self, kind: HostKind) -> bool {
         !self.points(kind) && [Gesture::FlickUp, Gesture::FlickDown, Gesture::FlickLeft, Gesture::FlickRight].into_iter().any(|g| self.action(g, kind).is_some())
     }
@@ -462,7 +464,7 @@ impl Profile {
     pub fn buzz(&self, gesture: Gesture) -> Option<&Pattern> { self.gestures.get(&gesture).and_then(|b| b.buzz.as_ref()) }
 
     pub fn types(&self, kind: HostKind) -> bool { self.typing && kind.is_computer() }
-    pub fn points(&self, kind: HostKind) -> bool { self.pointer && kind.is_computer() }
+    pub fn points(&self, kind: HostKind) -> bool { self.pointer && (kind.is_computer() || kind == HostKind::Phone) }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -788,7 +790,10 @@ pub fn parse_action_in(text: &str, names: &Names, path: &str) -> Result<Action, 
                 "middleClick" if count.is_empty() => Action::Click(Button::Middle),
                 "scrollUp" => Action::Scroll(steps),
                 "scrollDown" => Action::Scroll(-steps),
-                _ => return Err(fail(format!("unknown mouse action \"{arg}\" (click, rightClick, middleClick, scrollUp[:n], scrollDown[:n])"))),
+                button => match button.strip_prefix("button").and_then(|n| n.parse::<u8>().ok()) {
+                    Some(n @ 4..=8) if count.is_empty() => Action::Click(Button::Extra(n)),
+                    _ => return Err(fail(format!("unknown mouse action \"{arg}\" (click, rightClick, middleClick, button4–button8, scrollUp[:n], scrollDown[:n])"))),
+                },
             }
         }
         "profile" => Action::Profile(match arg {

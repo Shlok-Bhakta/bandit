@@ -109,7 +109,7 @@ struct ProfileEditorView: View {
                     Label { Text("Type handwriting"); Text("Computers: what you write with a finger is typed").font(.caption) } icon: { Image(systemName: "pencil.and.scribble") }
                 }
                 Toggle(isOn: profile.pointer) {
-                    Label { Text("Air mouse"); Text("Computers: pinch, hold and move the wrist").font(.caption) } icon: { Image(systemName: "computermouse") }
+                    Label { Text("Air mouse"); Text("Pinch, hold and move the wrist. iPhone: turn on AssistiveTouch").font(.caption) } icon: { Image(systemName: "computermouse") }
                 }
             } header: {
                 Text("Behaviour")

@@ -86,6 +86,11 @@ extension MouseButton {
         case .left: "Click"
         case .right: "Right click"
         case .middle: "Middle click"
+        case .button4: "Button 4"
+        case .button5: "Button 5"
+        case .button6: "Button 6"
+        case .button7: "Button 7"
+        case .button8: "Button 8"
         }
     }
 }
@@ -111,7 +116,8 @@ extension ProfileFormat {
         ("key:<chord>", "A key with modifiers, pressed and released (computers, TVs): key:enter, key:cmd+shift+m, key:f5, key:]"),
         ("hold:<chord>", "Held while middle.hold lasts (push-to-talk), released with the finger or after 60 s"),
         ("type:<text>", "Types 1–64 printable ASCII characters (US layout)"),
-        ("mouse:click · rightClick · middleClick", "Mouse buttons (computers)"),
+        ("mouse:click · rightClick · middleClick", "Mouse buttons (computers; an iPhone with AssistiveTouch on)"),
+        ("mouse:button4 … button8", "Extra mouse buttons. A computer: 4 back, 5 forward. An iPhone: AssistiveTouch gives each one an action, like Home, App Switcher, Control Center, Screenshot or a Shortcut. Firmware 0.16"),
         ("mouse:scrollUp · scrollDown, optionally :<1–20>", "Wheel steps (default 4)"),
         ("profile:<id> · profile:next · profile:previous", "Switch this host's profile"),
         ("host:next · host:previous · host:<kind>", "Send gestures to another connected host"),
@@ -129,7 +135,7 @@ extension ProfileFormat {
 
         Rules:
         - Top level: "format": "np-profiles", "version": 1, optional "name" (≤ 40 characters), optional "menu" (one letter a–z or digit 0–9 → an action other than hold: and menu), optional "start" ({"phone"|"computer"|"tv": profile id}; the profile must allow that kind), "profiles": 1–12 profiles.
-        - A profile: "id" (1–16 of a–z, 0–9, -; unique), "name" (1–24 characters), optional "buzz" (1–4 or a pattern name), "hosts" (any of phone, computer, mac, windows, linux, tv; default everyone), "typing" (handwriting is typed on computers), "pointer" (pinch-hold and move the wrist moves the mouse on computers; the dial is off), "gestures" (gesture → action), "apps" (up to 16 Mac bundle ids, like com.google.Chrome: a computer whose helper reports one of them in front switches to this profile; each app in one profile only). Optional app fields: "description", "symbol" (an SF Symbol name), "color" ("#rrggbb").
+        - A profile: "id" (1–16 of a–z, 0–9, -; unique), "name" (1–24 characters), optional "buzz" (1–4 or a pattern name), "hosts" (any of phone, computer, mac, windows, linux, tv; default everyone), "typing" (handwriting is typed on computers), "pointer" (pinch-hold and move the wrist moves the mouse on computers, and on an iPhone with AssistiveTouch on (firmware 0.16); the dial and flicks are off there), "gestures" (gesture → action), "apps" (up to 16 Mac bundle ids, like com.google.Chrome: a computer whose helper reports one of them in front switches to this profile; each app in one profile only). Optional app fields: "description", "symbol" (an SF Symbol name), "color" ("#rrggbb").
         - A gesture maps to one action string, or to an object by host kind: {"phone": …, "computer": …, "mac": …, "windows": …, "linux": …, "tv": …, "default": …}. The most specific kind wins (mac beats computer), then default.
         - At most \(maxBytes) bytes minified. Windows and Linux get cmd as Ctrl, so key:cmd+c copies everywhere.
 

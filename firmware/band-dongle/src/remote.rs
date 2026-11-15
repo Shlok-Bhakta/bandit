@@ -36,11 +36,14 @@ const KEYBOARD_COLLECTION: &[u8] = &[
     0x75, 0x08, 0x15, 0x00, 0x25, 0x65, 0x05, 0x07, 0x19, 0x00, 0x29, 0x65, 0x81, 0x00, 0xC0,
 ];
 
-/// Mouse, report 2: three buttons, then relative X, Y and wheel (write mode's air mouse).
+/// Mouse, report 2: eight buttons, then relative X, Y and wheel (the air mouse). The same four
+/// bytes as before 0.16's buttons 4–8 (they were padding), so a host that kept the old map just
+/// ignores them. On an iPhone the pointer needs AssistiveTouch, which also gives buttons 4–8 any
+/// action (Home, App Switcher, Control Center, Screenshot, a Shortcut...).
 const MOUSE_COLLECTION: &[u8] = &[
     0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x85, MOUSE_ID, 0x09, 0x01, 0xA1, 0x00, 0x05, 0x09, 0x19, 0x01,
-    0x29, 0x03, 0x15, 0x00, 0x25, 0x01, 0x95, 0x03, 0x75, 0x01, 0x81, 0x02, 0x95, 0x01, 0x75, 0x05,
-    0x81, 0x01, 0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x38, 0x15, 0x81, 0x25, 0x7F, 0x75, 0x08,
+    0x29, 0x08, 0x15, 0x00, 0x25, 0x01, 0x95, 0x08, 0x75, 0x01, 0x81, 0x02,
+    0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x38, 0x15, 0x81, 0x25, 0x7F, 0x75, 0x08,
     0x95, 0x03, 0x81, 0x06, 0xC0, 0xC0,
 ];
 
@@ -69,9 +72,9 @@ const MAX_HOSTS: usize = 5;
 const FAST_ADVERTISING: Duration = Duration::from_secs(30);
 const FAST_INTERVAL: (u16, u16) = (32, 48);
 const SLOW_INTERVAL: (u16, u16) = (160, 240);
-/// A computer's link at 15 ms with no skipped events, so the air mouse's moves reach it as they
-/// come (macOS otherwise picks a slower interval). Within Apple's rules: min = max = 15 ms,
-/// supervision 2 s. The dongle runs on USB power, and a computer doesn't mind.
+/// A host's link at 15 ms with no skipped events, so the air mouse's moves (and every key) reach
+/// it as they come (macOS and iOS otherwise pick slower intervals). Within Apple's rules: min = max
+/// = 15 ms, supervision 2 s. The dongle runs on USB power; a phone spends a little more battery.
 fn request_fast_link(handle: u16) {
     let params = esp_idf_svc::sys::ble_gap_upd_params {
         itvl_min: 12, itvl_max: 12, latency: 0, supervision_timeout: 200,
@@ -140,8 +143,8 @@ impl Kind {
         match self { Kind::Phone => HostKind::Phone, Kind::Mac => HostKind::Mac, Kind::Windows => HostKind::Windows,
                      Kind::Linux => HostKind::Linux, Kind::Tv => HostKind::Tv }
     }
-    /// Reads the computer report map (keyboard and mouse); a phone's stays media-only, because
-    /// iOS hides its on-screen keyboard while a keyboard is connected. Hosts cache the map when
+    /// Reads the computer report map (keyboard and mouse); a phone's has no keyboard, because
+    /// iOS hides its on-screen keyboard while a keyboard is connected (a mouse since 0.16). Hosts cache the map when
     /// they pair, so a host can't move between the two without pairing again.
     pub fn keyboard(self) -> bool { self != Kind::Phone }
     /// Shortcuts are written with ⌘ (GUI); Windows and Linux use Ctrl for the same ones.
@@ -381,7 +384,7 @@ impl Remote {
         hid.manufacturer("Neural Playground");
         hid.pnp(0x02, 0x16C0, 0x27DE, 0x0600);
         hid.hid_info(0x00, 0x01);
-        let phone_map = [CONSUMER_COLLECTION, TELEPHONY_COLLECTION].concat();
+        let phone_map = [CONSUMER_COLLECTION, TELEPHONY_COLLECTION, MOUSE_COLLECTION].concat();
         let computer_map = [KEYBOARD_COLLECTION, MOUSE_COLLECTION, CONSUMER_COLLECTION, TELEPHONY_COLLECTION].concat();
         hid.report_map(&phone_map);
         // Hosts show this as NP Band Remote's battery: the band's last reading (0 until the first one).
@@ -466,7 +469,7 @@ impl Remote {
         *ALONE.lock().unwrap() = (Some(Instant::now()), true);
         advertising.lock().min_interval(FAST_INTERVAL.0).max_interval(FAST_INTERVAL.1);
         advertising.lock().start()?;
-        info!("HOST side: advertising \"NP Band Remote\" (phones: media keys, voice, phone mute; computers: also keyboard and mouse)");
+        info!("HOST side: advertising \"NP Band Remote\" (phones: media keys, voice, phone mute and mouse; computers: also a keyboard)");
         Ok(())
     }
 
@@ -561,7 +564,7 @@ impl Remote {
             state.activate(handle);
         }
         drop(state);
-        if kind.computer() { request_fast_link(handle); }
+        if kind.computer() || kind == Kind::Phone { request_fast_link(handle); }
         if kind == Kind::Phone { crate::ancs::watch(handle); }
         if known.is_none() { self.save_known(); }
         self.save_preferred();
@@ -600,11 +603,11 @@ impl Remote {
 
     /// macOS sets its own link parameters after connecting (a 15 ms interval, but skipping up to
     /// 22 events: a third of a second before a mouse move may go). Asks again, every 20 s at
-    /// most, while a computer's link isn't 15 ms with no skipping. Call every couple of seconds.
+    /// most, while a computer's or phone's link isn't 15 ms with no skipping. Call every couple of seconds.
     pub fn tune_links(&self) {
         let computers: Vec<u16> = {
             let state = self.0.state.lock().unwrap();
-            state.hosts.iter().filter(|host| host.ready && host.kind.computer()).map(|host| host.handle).collect()
+            state.hosts.iter().filter(|host| host.ready && (host.kind.computer() || host.kind == Kind::Phone)).map(|host| host.handle).collect()
         };
         let mut asked = LINK_ASKED.lock().unwrap();
         asked.retain(|(handle, _)| computers.contains(handle));
@@ -923,13 +926,12 @@ impl Remote {
         sent.ok().map(|_| handle)
     }
 
-    /// One mouse report to the active host, if it's a computer: buttons held, a move and a
-    /// wheel step. No release: the next report says what's held. Logged only when it fails.
+    /// One mouse report to the active host (every host's map has the mouse since 0.16): buttons
+    /// held, a move and a wheel step. No release: the next report says what's held. Logged only when it fails.
     pub fn mouse(&self, buttons: u8, dx: i8, dy: i8, wheel: i8) -> bool {
         let handle = {
             let state = self.0.state.lock().unwrap();
             let Some(host) = state.active.and_then(|active| state.hosts.iter().find(|host| host.handle == active)) else { return false };
-            if !host.kind.computer() { return false; }
             host.handle
         };
         let sent = self.0.mouse.lock().notify_with(&[buttons, dx as u8, dy as u8, wheel as u8], handle);

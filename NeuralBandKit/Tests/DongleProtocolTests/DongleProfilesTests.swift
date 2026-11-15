@@ -148,10 +148,12 @@ enum ProfileVectors {
         #expect(try parse("none:") == ProfileAction.none)
         #expect(try parse("mouse:scrollDown:+3") == .scroll(-3))
         #expect(try parse("mouse:rightClick") == .click(.right))
+        #expect(try parse("mouse:button4") == .click(.button4))
+        #expect(try parse("mouse:button8") == .click(.button8))
         #expect(try parse("type:a:b") == .type("a:b"))
         #expect(try parse("profile:b") == .profile(.id("b")))
         #expect(try parse("host:tv") == .host(.kind(.tv)))
-        for bad in ["mouse:click:3", "mouse:scrollUp:21", "type:", "type:héllo", "profile:c", "host:fridge", "media:loud", "Menu", "menu:x"] {
+        for bad in ["mouse:click:3", "mouse:button3", "mouse:button9", "mouse:button4:2", "mouse:scrollUp:21", "type:", "type:héllo", "profile:c", "host:fridge", "media:loud", "Menu", "menu:x"] {
             #expect(throws: ProfileError.self, "\(bad)") { try parse(bad) }
         }
         let error = try #require(ProfileFormat.validate(Data(#"{"format":"np-profiles","version":1,"profiles":[{"id":"a","name":"A","gestures":{"swipe.up":7}}]}"#.utf8)))

@@ -292,6 +292,7 @@ struct VerdictRow: View {
 
 struct MouseEditor: View {
     @Binding var argument: String
+    private static let known = ["click", "rightClick", "middleClick", "scrollUp", "scrollDown"] + (4...8).map { "button\($0)" }
 
     private var parts: (what: String, steps: Int?) {
         let split = argument.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
@@ -304,9 +305,14 @@ struct MouseEditor: View {
             Text("Click").tag("click")
             Text("Right click").tag("rightClick")
             Text("Middle click").tag("middleClick")
+            ForEach(4...8, id: \.self) { n in Text("Button \(n)").tag("button\(n)") }
             Text("Scroll up").tag("scrollUp")
             Text("Scroll down").tag("scrollDown")
-            if !["click", "rightClick", "middleClick", "scrollUp", "scrollDown"].contains(parts.what) { Text(parts.what).tag(parts.what) }
+            if !Self.known.contains(parts.what) { Text(parts.what).tag(parts.what) }
+        }
+        if parts.what.hasPrefix("button") {
+            Text("On an iPhone, give it an action in Settings › Accessibility › Touch › AssistiveTouch › Devices: press the gesture when it asks for the button. On a computer, 4 is back and 5 forward.")
+                .font(.caption).foregroundStyle(.secondary)
         }
         if parts.what.hasPrefix("scroll") {
             Stepper("\(parts.steps ?? 4) wheel steps", value: Binding(get: { parts.steps ?? 4 }, set: { argument = $0 == 4 ? parts.what : "\(parts.what):\($0)" }), in: 1...20)

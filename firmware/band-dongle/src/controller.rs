@@ -301,7 +301,7 @@ impl<'a> Controller<'a> {
             // Only `middle.hold` holds (`event`); elsewhere the check refused it.
             Do::Hold(chord) => self.remote.send(Action::Key { modifiers: chord.modifiers, usage: chord.usage }),
             Do::Type(text) => self.remote.type_text(text),
-            Do::Click(button) => self.remote.click(match button { Button::Left => buttons::LEFT, Button::Right => buttons::RIGHT, Button::Middle => buttons::MIDDLE }),
+            Do::Click(button) => self.remote.click(match button { Button::Left => buttons::LEFT, Button::Right => buttons::RIGHT, Button::Middle => buttons::MIDDLE, Button::Extra(n) => 1 << ((*n).clamp(4, 8) - 1) }),
             Do::Scroll(steps) => { self.remote.mouse(0, 0, 0, *steps); }
             Do::Profile(target) => if let Err(error) = match target {
                 // By id: a new set may have arrived since this one was read.

@@ -32,7 +32,7 @@ fn the_built_in_profiles_are_valid_and_do_what_the_dongle_did() {
     assert_eq!(set.menu.get(&'l'), Some(&Action::Host(HostTarget::Next)));
     assert!(!set.profiles[1].allows(HostKind::Phone));
     // Only the dial or the pointer need wrist motion: a profile with neither never turns it on.
-    assert!(media.uses_motion(HostKind::Phone) && write.uses_motion(HostKind::Mac) && !write.uses_motion(HostKind::Phone));
+    assert!(media.uses_motion(HostKind::Phone) && write.uses_motion(HostKind::Mac) && !write.uses_motion(HostKind::Tv));
 }
 
 #[test]
@@ -96,6 +96,19 @@ fn chords() {
     assert!(parse_chord("cmd+").is_err());
     assert!(parse_chord("hyper+a").is_err());
     assert!(parse_chord("f13").is_err());
+}
+
+#[test]
+fn mouse_buttons_four_to_eight_and_a_phone_pointer() {
+    assert_eq!(parse_action("mouse:button4", &[], "x"), Ok(Action::Click(Button::Extra(4))));
+    assert_eq!(parse_action("mouse:button8", &[], "x"), Ok(Action::Click(Button::Extra(8))));
+    for wrong in ["mouse:button3", "mouse:button9", "mouse:button4:2", "mouse:button"] {
+        assert!(parse_action(wrong, &[], "x").is_err(), "{wrong}");
+    }
+    let set = ProfileSet::parse(r#"{"format":"np-profiles","version":1,"name":"t","profiles":[{"id":"p","name":"P","pointer":true,"gestures":{"flick.up":"media:next"}}]}"#).unwrap();
+    let pointer = &set.profiles[0];
+    assert!(pointer.points(HostKind::Phone) && pointer.points(HostKind::Mac) && !pointer.points(HostKind::Tv));
+    assert!(!pointer.flicks(HostKind::Phone) && pointer.flicks(HostKind::Tv), "the pinch points where it can, flicks elsewhere");
 }
 
 #[test]

@@ -133,6 +133,13 @@ and `tv`, which do what the modes below always did.
   Lowest free heap 63 → 137 KB, largest free block 31 → 90 KB; the log's `memory:` lines show
   where it goes (pools, each task's unused stack), and `make capture-cmd C='...'` sends a command
   through a running capture without resetting the dongle.
+- **A mouse for the iPhone (v0.16.0):** the phone's report map has the mouse now (still no
+  keyboard, so the on-screen keyboard stays), with eight buttons instead of three. With
+  AssistiveTouch on (Settings › Accessibility › Touch), a `pointer` profile's pinch-and-move points
+  on the iPhone, `mouse:click` taps, and `mouse:button4`…`button8` do whatever AssistiveTouch's
+  Devices screen gives them: Home, App Switcher, Control Center, Screenshot, a Shortcut... The
+  phone's link is asked for 15 ms like a computer's. **A phone paired before 0.16 keeps its old
+  map:** forget NP Band Remote on it and pair again.
 - **Speed and links before RAM (v0.15.3):** 0.15.2's Bluetooth buffer cuts ran out in real use
   (volume swipes with wrist motion on: the band's credits couldn't be sent and the session
   dropped), so msys is 48+24 and ACL 24 again, and FreeRTOS, the heap and the Bluetooth controller
