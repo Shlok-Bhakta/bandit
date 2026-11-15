@@ -65,7 +65,7 @@ struct PairingView: View {
             } footer: {
                 Text(status.hosts.count >= 5
                      ? "Five hosts are connected, the most the dongle takes. Forget one on the Dongle tab first."
-                     : "While the window is open, the next new device to pair becomes a \(kind.label). Outside it, unknown devices can't pair. A phone gets media keys only; computers and TVs get a keyboard and mouse, so a phone can't later become a computer without pairing again.")
+                     : "While the window is open, the next new device to pair becomes a \(kind.label). Outside it, unknown devices can't pair. A phone gets media keys and a mouse (firmware 0.16; the pointer needs AssistiveTouch), no keyboard; computers and TVs get a keyboard too, so a phone can't later become a computer without pairing again.")
             }
         }
     }

@@ -24,8 +24,8 @@ Band ──BLE + L2CAP, encrypted, owner key──▶ XIAO ESP32-S3 ──BLE HI
 All of them see the **band's** battery as NP Band Remote's (the Battery Service, read every 2
 minutes while the band is connected; the last reading is kept over a reboot, 0% before the first).
 
-Each host reads its own report map when it pairs and caches it: phones a media-only one, everything
-else the keyboard and mouse one. So a Mac, PC or TV can be relabelled later (the app: touch and hold
+Each host reads its own report map when it pairs and caches it: phones one without a keyboard (media keys,
+and a mouse since 0.16), everything else the keyboard and mouse one. So a Mac, PC or TV can be relabelled later (the app: touch and hold
 the host; or `kind <h> windows`), but a phone ↔ anything else needs pairing again. New devices pair
 as phones. To pair anything else, plug the dongle into it (a Mac pairing window is open for 2
 minutes after power-up), or open a window: the app's "Pair a computer or TV", holding the dongle's
