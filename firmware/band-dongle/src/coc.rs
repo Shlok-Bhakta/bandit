@@ -20,9 +20,9 @@ use esp_idf_svc::sys;
 
 pub const MTU: u16 = 1024;
 /// One SDU fits a block. In use at once: the receive buffer armed, the one being copied out, and
-/// what's being sent (one at a time): 2 of 8 at most (0.15.1); the log's `np_coc` min free shows
-/// the slack.
-const BLOCKS: u16 = 5;
+/// what's being sent (one at a time): 2 at most, with motion (0.15.1); the log's `np_coc` min
+/// free shows the slack.
+const BLOCKS: u16 = 4;
 /// Received bytes waiting for the session: a few hundred normally; motion streams ~9 KB/s and
 /// starts with a burst, so this is seconds of the loop being held up.
 const RX_LIMIT: usize = 32 * 1024;
@@ -32,7 +32,6 @@ const BLOCK_SIZE: usize = MTU as usize + 64;
 struct Pool {
     mempool: sys::os_mempool,
     mbuf_pool: sys::os_mbuf_pool,
-    _memory: Vec<sys::os_membuf_t>,
 }
 
 struct PoolPtr(*mut Pool);
@@ -73,14 +72,16 @@ static STATE: Mutex<State> = Mutex::new(State {
 fn pool() -> *mut Pool {
     POOL.get_or_init(|| {
         let words = BLOCK_SIZE.div_ceil(std::mem::size_of::<sys::os_membuf_t>()) * BLOCKS as usize;
-        let pool = Box::leak(Box::new(Pool {
-            mempool: Default::default(),
-            mbuf_pool: Default::default(),
-            _memory: vec![0; words],
-        }));
+        let bytes = words * std::mem::size_of::<sys::os_membuf_t>();
+        // In RTC RAM (7 KB the allocator otherwise only falls back to), out of the main region's
+        // way: it's allocated at the first connect, in the middle of everything else.
+        // SAFETY: a heap_caps allocation never freed; os_mempool_init only needs `bytes` of
+        // word-aligned memory, which heap_caps_malloc gives.
+        let mut memory = unsafe { sys::heap_caps_malloc(bytes, sys::MALLOC_CAP_RTCRAM | sys::MALLOC_CAP_8BIT) };
+        if memory.is_null() { memory = vec![0 as sys::os_membuf_t; words].leak().as_mut_ptr() as *mut c_void; }
+        let pool = Box::leak(Box::new(Pool { mempool: Default::default(), mbuf_pool: Default::default() }));
         unsafe {
-            let rc = sys::os_mempool_init(&mut pool.mempool, BLOCKS, BLOCK_SIZE as u32,
-                                          pool._memory.as_mut_ptr() as *mut c_void, c"np_coc".as_ptr());
+            let rc = sys::os_mempool_init(&mut pool.mempool, BLOCKS, BLOCK_SIZE as u32, memory, c"np_coc".as_ptr());
             assert_eq!(rc, 0, "os_mempool_init");
             let rc = sys::os_mbuf_pool_init(&mut pool.mbuf_pool, &mut pool.mempool, BLOCK_SIZE as u16, BLOCKS);
             assert_eq!(rc, 0, "os_mbuf_pool_init");

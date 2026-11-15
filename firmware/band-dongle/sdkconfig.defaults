@@ -1,8 +1,12 @@
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=24000
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=20480
 CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=8192
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+# Code runs from flash through a 16 KB cache, so how fast flash reads decides how fast nearly
+# everything is: QIO at 80 MHz (`make flash` passes 80 MHz; espflash's default was 40) made the
+# band's packets 5x faster than DIO at 40 (0.15.2's `bench`). The bootloader switches to QIO.
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 # Full speed (the dongle is on USB power): the band session's key exchange is CPU-bound.
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
@@ -22,12 +26,13 @@ CONFIG_BT_NIMBLE_MAX_BONDS=12
 CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM=2
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256
 # Buffer pools, from the log's `memory: pools` min free (0.15.1, phone and band connected): msys
-# 2 of 56 used, events 3 of 30. (ACL from the controller stays 24: one that finds none free is
-# dropped, and the band's motion arrives in bursts.)
+# 2 of 56 used, events 3 of 30, ACL from the controller 3 of 24 with motion forced on for 13
+# minutes (16 left: one that finds none free is dropped, and motion arrives in bursts).
 CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=16
 CONFIG_BT_NIMBLE_MSYS_1_BLOCK_SIZE=320
-CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=8
+CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=4
 CONFIG_BT_NIMBLE_TRANSPORT_EVT_COUNT=16
+CONFIG_BT_NIMBLE_TRANSPORT_ACL_FROM_LL_COUNT=16
 
 # Over-the-air updates: a fresh image runs on probation and the bootloader rolls back to the
 # previous slot if it reboots before the image confirms itself (see ota.rs).
@@ -45,3 +50,25 @@ CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
 
 # Every task's unused stack, for the log's `memory: stack unused` line (memory.rs).
 CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+
+# Code out of IRAM (it shares SRAM with the heap: every KB here is a KB of heap). None of these
+# are called from an IRAM interrupt while the flash cache is off.
+CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y
+CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH=y
+CONFIG_RINGBUF_PLACE_FUNCTIONS_INTO_FLASH=y
+CONFIG_SPI_FLASH_ROM_IMPL=y
+CONFIG_ESP_EVENT_POST_FROM_IRAM_ISR=n
+
+# Stacks, from the log's `memory: stack unused` (0.15.1): esp_timer used 0.6 KB of 3.5, Tmr Svc
+# 0.7 of 2, main 17.4 of 23.4.
+CONFIG_ESP_TIMER_TASK_STACK_SIZE=2560
+CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=1536
+# Prepared (long) writes: never used (iOS and macOS write within their MTU); 64 by default.
+CONFIG_BT_NIMBLE_ATT_MAX_PREP_ENTRIES=16
+CONFIG_BT_CTRL_SCAN_DUPL_CACHE_SIZE=30
+# Only Bluetooth runs (Espressif recommends this off then): its code and state.
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=n
+# The Bluetooth controller runs from flash too (19.5 KB of IRAM): it pauses while flash is
+# written, which the band link, NVS saves and updates ride out (0.15.2, serial update with the band
+# streaming).
+CONFIG_BT_CTRL_RUN_IN_FLASH_ONLY=y

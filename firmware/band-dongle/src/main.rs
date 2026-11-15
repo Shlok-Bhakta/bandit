@@ -26,7 +26,7 @@ use band_core::identity::EnrollmentIdentity;
 use band_core::responder::{Responder, SimMode};
 use band_core::session::BandSession;
 use controller::Controller;
-use remote::{Kind, Remote};
+use remote::Remote;
 use base64::Engine;
 use esp32_nimble::enums::{AuthReq, SecurityIOCap};
 use esp32_nimble::utilities::BleUuid;
@@ -48,7 +48,9 @@ const PSM_CHARACTERISTIC: BleUuid = uuid128!("2d41da7c-82b6-42aa-b34e-e2e01df8cc
 /// another reclaims it; holding it 2 s opens a window for pairing a computer.
 const BOOT_BUTTON: i32 = 0;
 
-fn watch_boot_button(remote: Remote) {
+/// Polled every 30 ms on the esp_timer task, not a thread of its own (3 KB of stack): it only
+/// flips `control::PAUSED` or raises `control::BUTTON_HELD`, and the control thread does the rest.
+fn watch_boot_button() {
     unsafe {
         let config = esp_idf_svc::sys::gpio_config_t {
             pin_bit_mask: 1u64 << BOOT_BUTTON,
@@ -59,31 +61,33 @@ fn watch_boot_button(remote: Remote) {
         };
         esp_idf_svc::sys::gpio_config(&config);
     }
-    memory::spawn(c"button", 3072, move || {
-            let mut pressed: Option<Instant> = None;
-            let mut long_handled = false;
-            loop {
-                let down = unsafe { esp_idf_svc::sys::gpio_get_level(BOOT_BUTTON) } == 0;
-                match (down, pressed) {
-                    (true, None) => { pressed = Some(Instant::now()); long_handled = false; }
-                    (true, Some(since)) if !long_handled && since.elapsed() >= Duration::from_secs(2) => {
-                        long_handled = true;
-                        info!("BOOT button held: pairing a computer");
-                        remote.open_pairing(Some(Kind::Mac));
-                    }
-                    (false, Some(_)) => {
-                        pressed = None;
-                        if !long_handled {
-                            let paused = !control::PAUSED.fetch_xor(true, std::sync::atomic::Ordering::SeqCst);
-                            info!("BOOT button: band link {}", if paused { "PAUSED (band released for the phone app)" } else { "resumed" });
-                        }
-                    }
-                    _ => {}
-                }
-                std::thread::sleep(Duration::from_millis(30));
+    use std::sync::atomic::Ordering::SeqCst;
+    let mut pressed: Option<Instant> = None;
+    let mut long_handled = false;
+    let poll = move || {
+        let down = unsafe { esp_idf_svc::sys::gpio_get_level(BOOT_BUTTON) } == 0;
+        match (down, pressed) {
+            (true, None) => { pressed = Some(Instant::now()); long_handled = false; }
+            (true, Some(since)) if !long_handled && since.elapsed() >= Duration::from_secs(2) => {
+                long_handled = true;
+                control::BUTTON_HELD.store(true, SeqCst);
             }
-        })
-        .expect("button thread");
+            (false, Some(_)) => {
+                pressed = None;
+                if !long_handled {
+                    control::PAUSED.fetch_xor(true, SeqCst);
+                    control::BUTTON_PRESSED.store(true, SeqCst);
+                }
+            }
+            _ => {}
+        }
+    };
+    let timer = esp_idf_svc::timer::EspTaskTimerService::new().and_then(|service| service.timer(poll))
+        .and_then(|timer| timer.every(Duration::from_millis(30)).map(|_| timer));
+    match timer {
+        Ok(timer) => std::mem::forget(timer),
+        Err(error) => warn!("BOOT button: couldn't poll it ({error})"),
+    }
 }
 
 
@@ -94,9 +98,9 @@ fn fingerprint(identity: &EnrollmentIdentity) -> String {
 
 /// The self-test, at the main task's priority, half a minute after boot (the control thread starts
 /// it): off the path to connecting the band (its key exchanges and signatures take a while), and
-/// its stack is taken only while it runs. It used 10.7 KB of it (0.15.1).
+/// its stack is taken only while it runs. It used 10.7 KB (0.15.1).
 fn spawn_self_test() {
-    let spawned = memory::spawn_with(c"self-test", 14 * 1024, Some(1), || {
+    let spawned = memory::spawn_with(c"self-test", 12 * 1024, Some(1), || {
         if let Err(error) = self_test() { error!("SELF-TEST FAIL: {error}"); }
         info!("self-test: {} B of its stack unused", memory::own_stack_unused());
     });
@@ -132,6 +136,56 @@ fn self_test() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `bench`: the band's hot path on this chip, for comparing builds without a band streaming
+/// motion (it doesn't while charging): a simulated band's gyro and orientation packets through
+/// `BandSession::feed_into`, alone and with a `Controller`, timing only the dongle's side.
+pub fn spawn_bench(remote: Remote) {
+    let spawned = memory::spawn_with(c"bench", 12 * 1024, Some(1), move || match bench(&remote) {
+        Ok(report) => info!("BENCH: {report}"),
+        Err(error) => warn!("BENCH failed: {error}"),
+    });
+    if let Err(error) = spawned { warn!("Couldn't start the bench: {error}"); }
+}
+
+fn bench(remote: &Remote) -> anyhow::Result<String> {
+    let owner = EnrollmentIdentity::new(p256::ecdsa::SigningKey::random(&mut rand_core::OsRng), None);
+    let mut band = Responder::new(SimMode::Enrolled, p256::ecdsa::SigningKey::random(&mut rand_core::OsRng));
+    let mut session = BandSession::new(Some(owner), None, false);
+    let mut to_band = session.request()?;
+    let mut time = 0.0;
+    for _ in 0..64 {
+        let from_band = band.respond(&to_band)?;
+        to_band.clear();
+        if from_band.is_empty() { break; }
+        time += 0.01;
+        to_band.extend(session.feed(&from_band, time)?.outgoing);
+    }
+    let mut controller = Controller::new(remote);
+    let (mut packets, mut events, mut through, mut alone) = (0u32, 0usize, Duration::ZERO, Duration::ZERO);
+    for round in 0..200i16 {
+        let mut batch = Vec::with_capacity(20);
+        for i in 0..10i16 {
+            batch.push(band.gyro3([round % 7 + i, -3, 2])?);
+            batch.push(band.orientation([1.0, 0.0, 0.0, 0.0])?);
+        }
+        // Odd rounds: band-core alone (the events dropped); even: through the controller too.
+        let only_core = round % 2 == 1;
+        let started = Instant::now();
+        for packet in batch.iter().filter(|packet| !packet.is_empty()) {
+            time += 0.01;
+            session.feed_into(packet, time, &mut |event| { events += 1; if !only_core { controller.event(event, time, None); } })?;
+            packets += 1;
+        }
+        if only_core { alone += started.elapsed(); } else { through += started.elapsed(); }
+        // The idle tasks run (the task watchdog watches them).
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    anyhow::ensure!(events > 0, "the simulated band sent no motion");
+    let half = packets / 2;
+    Ok(format!("{packets} packets, {events} events: {} us a packet through the controller, {} us band-core alone",
+               (through / half).as_micros(), (alone / half).as_micros()))
+}
+
 fn load_owner(nvs: &EspNvs<NvsDefault>) -> Option<EnrollmentIdentity> {
     let mut buffer = [0u8; 97];
     let bytes = nvs.get_blob("owner", &mut buffer).ok().flatten()?;
@@ -150,8 +204,9 @@ fn spawn_serial_reader(partition: EspDefaultNvsPartition, remote: Remote) {
         esp_idf_svc::sys::usb_serial_jtag_driver_install(&mut config);
         esp_idf_svc::sys::esp_vfs_usb_serial_jtag_use_driver();
     }
-    // It used under 2 KB of 12 (0.15.1); `OWNER` derives a public key, a few KB more.
-    memory::spawn(c"serial", 8192, move || {
+    // It used 3 KB of 8 (0.15.1), with the commands' own: command threads get 6 KB too. `OWNER`
+    // derives its public key on a thread of its own.
+    memory::spawn(c"serial", 6144, move || {
             let mut nvs = match EspNvs::new(partition, "np", true) {
                 Ok(nvs) => nvs,
                 Err(error) => { error!("serial: NVS unavailable: {error}"); return; }
@@ -171,13 +226,22 @@ fn handle_serial(line: &str, nvs: &mut EspNvs<NvsDefault>, remote: &Remote) {
     if let Some(encoded) = line.strip_prefix("OWNER ") {
         match base64::engine::general_purpose::STANDARD.decode(encoded.trim()) {
             Ok(bytes) if bytes.len() == 32 || bytes.len() == 97 => {
-                let band = (bytes.len() == 97).then(|| &bytes[32..]);
-                match EnrollmentIdentity::from_bytes(&bytes[..32], band) {
-                    Ok(identity) => match nvs.set_blob("owner", &bytes) {
-                        Ok(()) => info!("Owner key stored in NVS (fingerprint {}). Rebooting.", fingerprint(&identity)),
+                let checked = memory::spawn(c"owner", 12 * 1024, {
+                    let bytes = bytes.clone();
+                    move || {
+                        let band = (bytes.len() == 97).then(|| &bytes[32..]);
+                        EnrollmentIdentity::from_bytes(&bytes[..32], band).map(|identity| fingerprint(&identity))
+                            .map_err(|error| error.to_string())
+                    }
+                });
+                let checked = checked.map_err(|error| error.to_string()).and_then(|thread| thread.join().map_err(|_| "panicked".to_string()));
+                match checked {
+                    Ok(Ok(print)) => match nvs.set_blob("owner", &bytes) {
+                        Ok(()) => info!("Owner key stored in NVS (fingerprint {print}). Rebooting."),
                         Err(error) => error!("Couldn't store the owner key: {error}"),
                     },
-                    Err(error) => error!("That isn't a valid owner key: {error}"),
+                    Ok(Err(error)) => error!("That isn't a valid owner key: {error}"),
+                    Err(error) => error!("Couldn't check the owner key: {error}"),
                 }
                 std::thread::sleep(Duration::from_millis(300));
                 unsafe { esp_idf_svc::sys::esp_restart() };
@@ -454,6 +518,8 @@ async fn stream_session(channel: &coc::Channel, identity: &EnrollmentIdentity, r
     // The most events one SDU made, and its size, since the last report.
     let mut burst = (0usize, 0usize);
     let mut slowest = Duration::ZERO;
+    // Time the loop spends working (not waiting for the band) since the last report: its CPU load.
+    let mut busy = Duration::ZERO;
     loop {
         let round = Instant::now();
         let mut outgoing = Vec::new();
@@ -461,6 +527,7 @@ async fn stream_session(channel: &coc::Channel, identity: &EnrollmentIdentity, r
         if received.is_empty() {
             embassy_time::Timer::after(embassy_time::Duration::from_millis(5)).await;
         }
+        let working = Instant::now();
         for sdu in received {
             last_traffic = now();
             let feeding = Instant::now();
@@ -524,6 +591,7 @@ async fn stream_session(channel: &coc::Channel, identity: &EnrollmentIdentity, r
         }
         if !outgoing.is_empty() { channel.send(&outgoing)?; }
         slowest = slowest.max(round.elapsed());
+        busy += working.elapsed();
         if session.streams_enabled() && now() - last_report >= 30.0 {
             last_report = now();
             let (sdus, bytes) = channel.stats();
@@ -536,12 +604,13 @@ async fn stream_session(channel: &coc::Channel, identity: &EnrollmentIdentity, r
                 info!("memory: stack unused {}", memory::stacks());
             }
             reports += 1;
-            info!("streaming: {} packets ({sdus} SDUs, {bytes} B, at most {} events from one of {} B, {} B waiting, {} ms a round), {} gyro, {} gestures, motion {}, writing {}, hand {:?}, link {}",
-                  session.authenticated_packets(), burst.0, burst.1, channel.take_peak(), slowest.as_millis(), controller.motion, controller.gestures,
+            info!("streaming: {} packets ({sdus} SDUs, {bytes} B, at most {} events from one of {} B, {} B waiting, {} ms a round, busy {} ms), {} gyro, {} gestures, motion {}, writing {}, hand {:?}, link {}",
+                  session.authenticated_packets(), burst.0, burst.1, channel.take_peak(), slowest.as_millis(), busy.as_millis(), controller.motion, controller.gestures,
                   if session.motion_on() { "on" } else { "off" }, if session.band_writing() { "on" } else { "off" }, session.hand(),
                   link_params(conn_handle));
             burst = (0, 0);
             slowest = Duration::ZERO;
+            busy = Duration::ZERO;
         }
     }
 }
@@ -558,7 +627,10 @@ fn main() -> anyhow::Result<()> {
     let partition = EspDefaultNvsPartition::take()?;
     let nvs = EspNvs::new(partition.clone(), "np", true)?;
     mark("NVS");
-    let device = BLEDevice::take();
+    // Bluetooth's buffer pools and tasks, kept for good: what doesn't fit 32 KB of the main region
+    // goes to the spare ones (they then hold 41 KB of it, 0.15.2).
+    let device = memory::in_spare_regions(32 * 1024, BLEDevice::take);
+    memory::watch_lowest();
     device.security().set_auth(AuthReq::Bond | AuthReq::Sc).set_io_cap(SecurityIOCap::NoInputNoOutput).resolve_rpa();
     let mut client = device.new_client();
     let mut band_address = saved_band(&nvs).or_else(|| adopt_band(&nvs, device));
@@ -574,7 +646,7 @@ fn main() -> anyhow::Result<()> {
     announce_gatt_changes(&nvs);
     ota::confirm_after_probation();
     spawn_serial_reader(partition, remote.clone());
-    watch_boot_button(remote.clone());
+    watch_boot_button();
     mark("threads");
     let steps: Vec<String> = marks.windows(2).map(|pair| format!("{} {} B", pair[1].0, pair[0].1 as isize - pair[1].1 as isize)).collect();
     info!("memory at boot: {} B free at start; {}; {} B free now", marks[0].1, steps.join(", "), memory::free());

@@ -103,7 +103,7 @@ ifdef REMOTE
 	scp -q partitions.csv $(ELF) $(REMOTE):$(REMOTE_DIR)/flash/
 	ssh $(REMOTE) $(REMOTE_DIR)/run flash
 else
-	$(ESPFLASH) flash --port $(PORT) --chip esp32s3 --flash-size 8mb \
+	$(ESPFLASH) flash --port $(PORT) --chip esp32s3 --flash-size 8mb --flash-freq 80mhz \
 	  --bootloader $(BOOTLOADER) --partition-table partitions.csv \
 	  --target-app-partition ota_0 --erase-parts otadata $(ELF)
 endif

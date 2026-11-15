@@ -72,6 +72,7 @@ Compact JSON, always at most 512 bytes. With many hosts it sheds, in order: host
 | `key <name>` | Send a key to the active host: `playpause next previous volup voldown voice phonemute teamsmute right left blank` |
 | `power motion on\|auto` / `power writing on\|auto` | Power measurements: keep wrist motion or the handwriting model on regardless of gestures (not saved; `auto` = as gestures need) |
 | `logs` | Resend the log backlog over the Log characteristic |
+| `bench` | (0.15.2) Time the band's hot path on the dongle: a simulated band's motion packets through band-core and the gesture controller, logged as `BENCH: … us a packet` (for comparing builds; a band on its charger sends no motion) |
 | `reboot` | Restart the dongle |
 
 ## Log (notify)

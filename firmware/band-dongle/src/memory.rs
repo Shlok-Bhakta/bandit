@@ -14,6 +14,30 @@ pub fn summary() -> String {
     format!("largest free block {largest} B, lowest free since boot {lowest} B, free now {free} B")
 }
 
+/// Runs `f` with the main heap region's largest free block taken but `leave` bytes, so what it
+/// allocates beyond those lands in the smaller regions (21 KB of RAM, 32 KB of DRAM, RTC RAM) the
+/// allocator otherwise only falls back to, and the main region keeps one bigger block. For what's
+/// allocated once at boot and kept. `watch_lowest` then starts the lowest-free mark afresh.
+pub fn in_spare_regions<T>(leave: usize, f: impl FnOnce() -> T) -> T {
+    // SAFETY: heap_caps calls only; the plug is never read or written, and freed below (freeing
+    // null, if it couldn't be taken, does nothing).
+    let plug = unsafe {
+        let size = sys::heap_caps_get_largest_free_block(sys::MALLOC_CAP_8BIT).saturating_sub(leave);
+        sys::heap_caps_malloc(size, sys::MALLOC_CAP_8BIT)
+    };
+    let result = f();
+    // SAFETY: `plug` came from heap_caps_malloc above and is freed once.
+    unsafe { sys::heap_caps_free(plug) };
+    result
+}
+
+/// The lowest-free mark from now on, not from the moment a plug (`in_spare_regions`) took the
+/// main region.
+pub fn watch_lowest() {
+    // SAFETY: no arguments; it fails harmlessly if already watching.
+    let _ = unsafe { sys::heap_caps_monitor_local_minimum_free_size_start() };
+}
+
 /// Free heap now, for marking what each step of starting up took.
 pub fn free() -> usize { unsafe { sys::heap_caps_get_free_size(sys::MALLOC_CAP_8BIT) } }
 
@@ -49,14 +73,14 @@ pub fn own_stack_unused() -> u32 { unsafe { sys::uxTaskGetStackHighWaterMark2(st
 
 /// A thread whose task is called `name` (they're all "pthread" otherwise, so `stacks` couldn't
 /// tell them apart), with `stack` bytes of stack.
-pub fn spawn<F: FnOnce() + Send + 'static>(name: &'static std::ffi::CStr, stack: usize, f: F)
-                                          -> std::io::Result<std::thread::JoinHandle<()>> {
+pub fn spawn<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(name: &'static std::ffi::CStr, stack: usize, f: F)
+                                                                 -> std::io::Result<std::thread::JoinHandle<T>> {
     spawn_with(name, stack, None, f)
 }
 
 /// `spawn` at `priority` (1-24), not the default.
-pub fn spawn_with<F: FnOnce() + Send + 'static>(name: &'static std::ffi::CStr, stack: usize, priority: Option<u8>, f: F)
-                                               -> std::io::Result<std::thread::JoinHandle<()>> {
+pub fn spawn_with<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(name: &'static std::ffi::CStr, stack: usize, priority: Option<u8>, f: F)
+                                                                      -> std::io::Result<std::thread::JoinHandle<T>> {
     use esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration;
     let default = ThreadSpawnConfiguration::default();
     let priority = priority.unwrap_or(default.priority);

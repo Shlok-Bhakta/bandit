@@ -133,6 +133,13 @@ and `tv`, which do what the modes below always did.
   Lowest free heap 63 → 137 KB, largest free block 31 → 90 KB; the log's `memory:` lines show
   where it goes (pools, each task's unused stack), and `make capture-cmd C='...'` sends a command
   through a running capture without resetting the dongle.
+- **Memory and speed (v0.15.2):** free heap 159 → 239 KB, largest free block 92 → 209 KB, lowest
+  free (self-test, a profile upload, `logs`, `profiles show`) 139 → 200 KB. Code the chip kept in
+  RAM (FreeRTOS, the heap, the flash driver, the Bluetooth controller: 92 → 46 KB) runs from
+  flash, Bluetooth's buffers live in the small RAM regions the heap otherwise only falls back to,
+  and the log streams straight out of its ring. Flash is read 4x faster (QIO at 80 MHz: `make
+  flash` used to leave it at 40), and the hashes and AES are built compact: a motion packet takes
+  2 ms of the dongle, not 8 (`bench`), and the self-test 0.9 s, not 2.
 
 ## The letter menu (v0.8; letters from the profile set since v0.11)
 

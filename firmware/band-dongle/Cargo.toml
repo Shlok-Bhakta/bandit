@@ -1,6 +1,6 @@
 [package]
 name = "band-dongle"
-version = "0.15.1"
+version = "0.15.2"
 edition = "2021"
 description = "Meta Neural Band dongle: connects to the band with its owner key (band-core) and exposes it as system input"
 license = "MIT"
@@ -13,7 +13,9 @@ harness = false
 opt-level = "s"
 
 # The session's P-256 key exchange and signatures are on the path to connecting the band: fast code
-# there (about 3x), small code elsewhere.
+# there (about 3x), small code elsewhere. Not the hashes and AES, which run for every packet: the
+# chip runs code from flash through a 16 KB cache, and their unrolled code missed it (a packet's
+# HMAC and AES took 6 ms at opt-level 3, 0.7 ms compact).
 [profile.release.package.p256]
 opt-level = 3
 [profile.release.package.primeorder]
@@ -25,11 +27,11 @@ opt-level = 3
 [profile.release.package.crypto-bigint]
 opt-level = 3
 [profile.release.package.sha2]
-opt-level = 3
+opt-level = "s"
 [profile.release.package.hmac]
-opt-level = 3
+opt-level = "s"
 [profile.release.package.aes]
-opt-level = 3
+opt-level = "s"
 [profile.release.package.band-core]
 opt-level = 3
 
@@ -41,7 +43,7 @@ opt-level = "z"
 log = "0.4"
 anyhow = "1"
 base64 = "0.22"
-sha2 = "0.10"
+sha2 = { version = "0.10", features = ["force-soft-compact"] }
 p256 = { version = "0.13", features = ["ecdsa"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 esp-idf-svc = { version = "0.53", features = ["embassy-time-driver", "critical-section"] }

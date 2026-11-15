@@ -31,9 +31,26 @@ static QUEUE: Mutex<Option<SyncSender<String>>> = Mutex::new(None);
 
 struct Upload {
     bytes: Vec<u8>,
-    /// Which bytes have arrived (the app may send chunks in any order).
-    filled: Vec<bool>,
+    /// Which bytes have arrived (the app may send chunks in any order), a bit each.
+    filled: Vec<u32>,
     sha8: String,
+}
+
+impl Upload {
+    fn fill(&mut self, range: std::ops::Range<usize>) {
+        for i in range { self.filled[i / 32] |= 1 << (i % 32); }
+    }
+
+    fn missing(&self) -> usize { (0..self.bytes.len()).filter(|i| self.filled[i / 32] & (1 << (i % 32)) == 0).count() }
+}
+
+/// The stored file, read straight into a buffer its size.
+fn stored(nvs: &EspNvs<NvsDefault>) -> Option<Vec<u8>> {
+    let len = nvs.blob_len(NVS_KEY).ok().flatten()?;
+    let mut bytes = vec![0u8; len];
+    let read = nvs.get_blob(NVS_KEY, &mut bytes).ok().flatten()?.len();
+    bytes.truncate(read);
+    Some(bytes)
 }
 
 /// Keeps what the worker needs: `profiles …` commands run one at a time, in the order they arrive
@@ -85,9 +102,7 @@ fn sha8(bytes: &[u8]) -> String { Sha256::digest(bytes)[..4].iter().map(|b| form
 
 /// The stored set, or the built-in one if there's none (or it no longer reads).
 pub fn load(nvs: &EspNvs<NvsDefault>) {
-    let mut buffer = vec![0u8; MAX_BYTES];
-    let stored = nvs.get_blob(NVS_KEY, &mut buffer).ok().flatten().map(|bytes| bytes.to_vec());
-    let current = match stored.map(|bytes| (ProfileSet::parse(&String::from_utf8_lossy(&bytes)), sha8(&bytes))) {
+    let current = match stored(nvs).map(|bytes| (ProfileSet::parse(&String::from_utf8_lossy(&bytes)), sha8(&bytes))) {
         Some((Ok(set), hash)) => {
             info!("PROFILES: \"{}\" ({} profiles, {hash})", set.name, set.profiles.len());
             Current { set: Arc::new(set), hash }
@@ -123,7 +138,7 @@ fn command(remote: &Remote, rest: &str) {
     match (words.next(), words.next(), words.next()) {
         (Some("begin"), Some(len), Some(sha)) => match len.parse::<usize>() {
             Ok(len) if (1..=MAX_BYTES).contains(&len) && sha.len() == 8 => {
-                *UPLOAD.lock().unwrap() = Some(Upload { bytes: vec![0; len], filled: vec![false; len], sha8: sha.to_ascii_lowercase() });
+                *UPLOAD.lock().unwrap() = Some(Upload { bytes: vec![0; len], filled: vec![0; len.div_ceil(32)], sha8: sha.to_ascii_lowercase() });
                 info!("PROFILES: receiving {len} bytes");
             }
             _ => refuse(format!("profiles begin <1-{MAX_BYTES} bytes> <8 hex digits of its SHA-256>")),
@@ -138,7 +153,7 @@ fn command(remote: &Remote, rest: &str) {
                 return refuse(format!("data past the {} bytes begun", upload.bytes.len()));
             };
             upload.bytes[offset..end].copy_from_slice(&chunk);
-            upload.filled[offset..end].fill(true);
+            upload.fill(offset..end);
         }
         (Some("commit"), None, None) => commit(remote, nvs),
         (Some("show"), None, None) => show(nvs),
@@ -159,10 +174,9 @@ fn command(remote: &Remote, rest: &str) {
 /// `PROFILES: show data <offset> <base64>` and `PROFILES: show end`. Paced, so the app's log
 /// stream (4 KB a quarter second) keeps every line.
 fn show(nvs: &Mutex<EspNvs<NvsDefault>>) {
-    let mut buffer = vec![0u8; MAX_BYTES];
-    let stored = nvs.lock().unwrap().get_blob(NVS_KEY, &mut buffer).ok().flatten().map(|bytes| bytes.to_vec());
+    let stored = stored(&nvs.lock().unwrap());
     let builtin = stored.is_none();
-    let bytes = stored.unwrap_or_else(|| np_profiles::DEFAULT_JSON.as_bytes().to_vec());
+    let bytes: std::borrow::Cow<[u8]> = stored.map_or(np_profiles::DEFAULT_JSON.as_bytes().into(), Into::into);
     info!("PROFILES: show begin {} {}{}", bytes.len(), sha8(&bytes), if builtin { " builtin" } else { "" });
     for (i, chunk) in bytes.chunks(150).enumerate() {
         info!("PROFILES: show data {} {}", i * 150, base64::engine::general_purpose::STANDARD.encode(chunk));
@@ -173,7 +187,7 @@ fn show(nvs: &Mutex<EspNvs<NvsDefault>>) {
 
 fn commit(remote: &Remote, nvs: &Mutex<EspNvs<NvsDefault>>) {
     let Some(upload) = UPLOAD.lock().unwrap().take() else { return refuse("commit before profiles begin".into()) };
-    let missing = upload.filled.iter().filter(|f| !**f).count();
+    let missing = upload.missing();
     if missing > 0 { return refuse(format!("{missing} bytes never arrived")); }
     let hash = sha8(&upload.bytes);
     if hash != upload.sha8 { return refuse(format!("the bytes hash to {hash}, not {}", upload.sha8)); }

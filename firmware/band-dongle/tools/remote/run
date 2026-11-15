@@ -16,7 +16,7 @@ tool=$1
 shift
 case $tool in
     flash)
-        exec bin/espflash flash --port "$port" --chip esp32s3 --flash-size 8mb \
+        exec bin/espflash flash --port "$port" --chip esp32s3 --flash-size 8mb --flash-freq 80mhz \
             --bootloader flash/bootloader.bin --partition-table flash/partitions.csv \
             --target-app-partition ota_0 --erase-parts otadata flash/band-dongle ;;
     *)
