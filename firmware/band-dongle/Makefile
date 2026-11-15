@@ -125,8 +125,8 @@ remote-sync:
 	@rsync -q -t tools/*.py $(REMOTE):$(REMOTE_DIR)/tools/
 	@rsync -q -t -p tools/remote/run tools/remote/setup-access.sh $(REMOTE):$(REMOTE_DIR)/
 
-release:
-	./release.sh "$(NOTES)"
+release: $(if $(BUILD_HOST),build)
+	$(if $(BUILD_HOST),BOOTLOADER=$(BOOTLOADER)) ./release.sh "$(NOTES)"
 
 serve:
 	tools/serve-releases.sh install

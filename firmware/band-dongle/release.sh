@@ -10,13 +10,16 @@ cd "$(dirname "$0")"
 PATH=$CARGO_HOME/bin:$PATH
 . "$EXPORT_ESP"
 
-cargo build --release
 ELF=target/xtensa-esp32s3-espidf/release/band-dongle
-OUT=$(ls -td target/xtensa-esp32s3-espidf/release/build/esp-idf-sys-*/out | head -1)
+# With BUILD_HOST, make has built on the other machine and passes its bootloader in BOOTLOADER.
+if [ -z "${BOOTLOADER:-}" ]; then
+  cargo build --release
+  BOOTLOADER=$(ls -td target/xtensa-esp32s3-espidf/release/build/esp-idf-sys-*/out | head -1)/build/bootloader/bootloader.bin
+fi
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/band-dongle-release.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 
-espflash save-image --chip esp32s3 --flash-size 8mb "$ELF" "$WORK/app.bin"
+espflash save-image --chip esp32s3 --flash-size 8mb --flash-freq 80mhz "$ELF" "$WORK/app.bin"
 espflash partition-table --to-binary -o "$WORK/partitions.bin" partitions.csv
 
 # Only the newest release stays published.
@@ -29,6 +32,6 @@ PACK=../dongle-pack
 "$HOST_TARGET/release/dongle-pack" pack "$WORK/app.bin" ../dist \
   --notes "${1:-}" \
   --version "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" \
-  --bootloader "$OUT/build/bootloader/bootloader.bin" \
+  --bootloader "$BOOTLOADER" \
   --partitions "$WORK/partitions.bin" \
   --esptool "$PACK/vendor/esptool-js-0.7.1.bundle.js"
