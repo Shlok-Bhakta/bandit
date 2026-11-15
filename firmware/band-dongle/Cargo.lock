@@ -83,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "band-dongle"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "anyhow",
  "band-core",

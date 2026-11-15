@@ -133,6 +133,10 @@ and `tv`, which do what the modes below always did.
   Lowest free heap 63 → 137 KB, largest free block 31 → 90 KB; the log's `memory:` lines show
   where it goes (pools, each task's unused stack), and `make capture-cmd C='...'` sends a command
   through a running capture without resetting the dongle.
+- **Speed and links before RAM (v0.15.3):** 0.15.2's Bluetooth buffer cuts ran out in real use
+  (volume swipes with wrist motion on: the band's credits couldn't be sent and the session
+  dropped), so msys is 48+24 and ACL 24 again, and FreeRTOS, the heap and the Bluetooth controller
+  are back in IRAM. The flash speed, compact crypto, stack and log-ring changes stay.
 - **Memory and speed (v0.15.2):** free heap 159 → 239 KB, largest free block 92 → 209 KB, lowest
   free (self-test, a profile upload, `logs`, `profiles show`) 139 → 200 KB. Code the chip kept in
   RAM (FreeRTOS, the heap, the flash driver, the Bluetooth controller: 92 → 46 KB) runs from

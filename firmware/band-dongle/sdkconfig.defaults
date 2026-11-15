@@ -25,14 +25,14 @@ CONFIG_BT_NIMBLE_SM_SC=y
 CONFIG_BT_NIMBLE_MAX_BONDS=12
 CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM=2
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256
-# Buffer pools, from the log's `memory: pools` min free (0.15.1, phone and band connected): msys
-# 2 of 56 used, events 3 of 30, ACL from the controller 3 of 24 with motion forced on for 13
-# minutes (16 left: one that finds none free is dropped, and motion arrives in bursts).
-CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=16
+# Buffer pools: generous on purpose. 0.15.2 cut msys to 16+4 and ACL to 16 from idle use, and
+# real use ran msys_1 dry (volume swipes to the phone with wrist motion on): the band's L2CAP
+# credits couldn't be sent (rc=6), it stopped, and the session dropped. Speed and links before RAM.
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=48
 CONFIG_BT_NIMBLE_MSYS_1_BLOCK_SIZE=320
-CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=4
-CONFIG_BT_NIMBLE_TRANSPORT_EVT_COUNT=16
-CONFIG_BT_NIMBLE_TRANSPORT_ACL_FROM_LL_COUNT=16
+CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=24
+CONFIG_BT_NIMBLE_TRANSPORT_EVT_COUNT=30
+CONFIG_BT_NIMBLE_TRANSPORT_ACL_FROM_LL_COUNT=24
 
 # Over-the-air updates: a fresh image runs on probation and the bootloader rolls back to the
 # previous slot if it reboots before the image confirms itself (see ota.rs).
@@ -51,11 +51,8 @@ CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
 # Every task's unused stack, for the log's `memory: stack unused` line (memory.rs).
 CONFIG_FREERTOS_USE_TRACE_FACILITY=y
 
-# Code out of IRAM (it shares SRAM with the heap: every KB here is a KB of heap). None of these
-# are called from an IRAM interrupt while the flash cache is off.
-CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y
-CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH=y
-CONFIG_RINGBUF_PLACE_FUNCTIONS_INTO_FLASH=y
+# FreeRTOS, heap and ringbuf code stays in IRAM (0.15.2 moved it to flash for ~28 KB of heap):
+# context switches and malloc on every packet shouldn't wait on flash cache misses.
 CONFIG_SPI_FLASH_ROM_IMPL=y
 CONFIG_ESP_EVENT_POST_FROM_IRAM_ISR=n
 
@@ -68,7 +65,5 @@ CONFIG_BT_NIMBLE_ATT_MAX_PREP_ENTRIES=16
 CONFIG_BT_CTRL_SCAN_DUPL_CACHE_SIZE=30
 # Only Bluetooth runs (Espressif recommends this off then): its code and state.
 CONFIG_ESP_COEX_SW_COEXIST_ENABLE=n
-# The Bluetooth controller runs from flash too (19.5 KB of IRAM): it pauses while flash is
-# written, which the band link, NVS saves and updates ride out (0.15.2, serial update with the band
-# streaming).
-CONFIG_BT_CTRL_RUN_IN_FLASH_ONLY=y
+# The Bluetooth controller stays in IRAM (0.15.2 ran it from flash for 19.5 KB): radio timing
+# shouldn't stall while flash is written or on cache misses.
