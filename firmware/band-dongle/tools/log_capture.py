@@ -36,6 +36,7 @@ def stamp():
 
 
 noise, noise_since = 0, time.time()
+lost = False  # logged once per outage, not on every retry while the dongle is unplugged
 while True:
     try:
         port = serial.Serial()
@@ -43,6 +44,7 @@ while True:
         port.dtr = False
         port.rts = False
         port.open()
+        lost = False
         write("crashes.log", f"{stamp()} [capture] port open")
         pending = b""
         while True:
@@ -69,5 +71,7 @@ while True:
                 write(f"dongle-{time.strftime('%Y%m%d')}.log", f"{stamp()} [capture] {noise} packet/event-12 lines in the last minute")
                 noise, noise_since = 0, time.time()
     except (serial.SerialException, OSError) as error:
-        write("crashes.log", f"{stamp()} [capture] port lost: {error}")
+        if not lost:
+            write("crashes.log", f"{stamp()} [capture] port lost: {error}")
+            lost = True
         time.sleep(2)
