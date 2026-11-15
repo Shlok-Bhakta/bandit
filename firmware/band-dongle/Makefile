@@ -17,9 +17,20 @@ ESPFLASH := $(CARGO_HOME)/bin/espflash
 # The Xtensa toolchain needs export-esp.sh in the same shell as cargo.
 ESPENV := . $(EXPORT_ESP) &&
 
+# Build on another machine (in config.mk: BUILD_HOST = crabcake), in ~/$(BUILD_DIR) there: git's
+# files (committed or not) go over, the ELF and bootloader come back, so flash, release and
+# addr2line work as before. Its toolchain: espup's, with export-esp.sh and a python3 that has
+# venv in ~/$(BUILD_DIR) (README: "Building on another machine").
+BUILD_HOST ?=
+BUILD_DIR ?= np-build
+
 PORT ?= /dev/cu.usbmodem1101
 ELF := target/xtensa-esp32s3-espidf/release/band-dongle
+ifdef BUILD_HOST
+BOOTLOADER = $(wildcard target/remote/bootloader.bin)
+else
 BOOTLOADER = $(firstword $(wildcard target/xtensa-esp32s3-espidf/release/build/esp-idf-sys-*/out/build/bootloader/bootloader.bin))
+endif
 # ESP-IDF's Python environment has pyserial.
 PY = $(firstword $(wildcard .embuild/espressif/python_env/*/bin/python))
 PACKAGE = $(firstword $(wildcard ../dist/*.npfw))
@@ -71,8 +82,19 @@ setup:
 	espup install --export-file $(EXPORT_ESP)
 
 build:
+ifdef BUILD_HOST
+	@cd ../.. && git ls-files --cached --others --exclude-standard firmware/band-dongle firmware/band-core firmware/np-profiles \
+	  | while read -r file; do [ -e "$$file" ] && echo "$$file"; done | rsync -a --files-from=- . $(BUILD_HOST):$(BUILD_DIR)/repo/
+	ssh $(BUILD_HOST) 'export PATH=$$HOME/$(BUILD_DIR)/bin:$$HOME/.cargo/bin:$$PATH && . $$HOME/$(BUILD_DIR)/export-esp.sh && \
+	  cd $(BUILD_DIR)/repo/firmware/band-dongle && cargo build --release && \
+	  cp "$$(ls -t target/xtensa-esp32s3-espidf/release/build/esp-idf-sys-*/out/build/bootloader/bootloader.bin | head -n 1)" target/bootloader.bin'
+	@mkdir -p $(dir $(ELF)) target/remote
+	scp -q $(BUILD_HOST):$(BUILD_DIR)/repo/firmware/band-dongle/$(ELF) $(ELF)
+	scp -q $(BUILD_HOST):$(BUILD_DIR)/repo/firmware/band-dongle/target/bootloader.bin target/remote/bootloader.bin
+else
 	@test -f $(EXPORT_ESP) || { echo "no $(EXPORT_ESP): run make setup, or set EXPORT_ESP in config.mk"; exit 1; }
 	$(ESPENV) cargo build --release
+endif
 
 flash: build $(TOOLS_READY)
 	@test -n "$(BOOTLOADER)" || { echo "no bootloader built yet"; exit 1; }

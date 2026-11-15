@@ -289,7 +289,7 @@ make ota-test             # push the published package over serial through the r
 
 ### The dongle on another machine
 
-The firmware builds only on this Mac (the Xtensa toolchain), but the dongle can be plugged into
+The firmware builds on this Mac (or another machine, below), and the dongle can be plugged into
 any Linux box you can ssh to. With `REMOTE = kiwi` in config.mk (or `make … REMOTE=kiwi`), `make
 flash` copies the images there and flashes with espflash, and `log`, `status`, `cmd`,
 `profiles-get`/`-put`, `connect-bench` and the OTA tests run there too (`power` doesn't: it
@@ -301,6 +301,20 @@ ssh -t kiwi sudo sh np-dongle/setup-access.sh   # lets you open the port; ModemM
 ```
 
 `make release` doesn't need the dongle at all: the phone app installs it over the air.
+
+### Building on another machine
+
+The build is mostly disk-bound (ESP-IDF is thousands of small files), so it can run on a Linux box
+with a fast internal disk. With `BUILD_HOST = crabcake` in config.mk, `make build` sends git's
+files (committed or not) to `~/np-build/repo` there, builds, and brings the ELF and bootloader
+back, so `flash`, `release` and addr2line work as before. Once, on that machine (no sudo needed):
+
+```sh
+curl -LsSf https://astral.sh/uv/install.sh | sh && uv python install 3.12   # a python3 with venv
+mkdir -p ~/np-build/bin && ln -s "$(uv python find 3.12)" ~/np-build/bin/python3 && ln -s python3 ~/np-build/bin/python
+cargo install espup ldproxy --locked
+espup install --toolchain-version 1.97.0.0 --targets esp32s3 --export-file ~/np-build/export-esp.sh
+```
 
 Serial commands (type a line, then Enter):
 

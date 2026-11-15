@@ -5,3 +5,4 @@
 # HOST_TARGET = /path/to/host-target   # where ../dongle-pack builds
 # PORT = /dev/cu.usbmodem1101           # the XIAO's serial port
 # REMOTE = kiwi                         # the dongle is plugged into this ssh host instead (make remote-setup)
+# BUILD_HOST = crabcake                 # build on this ssh host instead (README: "Building on another machine")
