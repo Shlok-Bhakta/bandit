@@ -22,8 +22,8 @@ struct VolumeKnob {
 }
 
 impl VolumeKnob {
-    const DETENT: f64 = 9.0;
-    const MIN_INTERVAL: f64 = 0.15;
+    const DETENT: f64 = 6.0;
+    const MIN_INTERVAL: f64 = 0.06;
 
     fn new() -> Self { Self { accumulated: 0.0, last_step: f64::NEG_INFINITY } }
     fn reset(&mut self) { self.accumulated = 0.0; }
@@ -32,7 +32,8 @@ impl VolumeKnob {
         if !degrees.is_finite() { return 0; }
         // A reversal drops what was building up the other way (no backlash steps).
         if self.accumulated * degrees < 0.0 { self.accumulated = 0.0; }
-        self.accumulated = (self.accumulated + degrees).clamp(-2.0 * Self::DETENT, 2.0 * Self::DETENT);
+        // Room for a fast turn's steps (they come out `MIN_INTERVAL` apart), not jitter's.
+        self.accumulated = (self.accumulated + degrees).clamp(-6.0 * Self::DETENT, 6.0 * Self::DETENT);
         if self.accumulated.abs() < Self::DETENT || now - self.last_step < Self::MIN_INTERVAL { return 0; }
         let step = self.accumulated.signum() as i32;
         self.accumulated -= step as f64 * Self::DETENT;
@@ -63,6 +64,9 @@ const HOLD_LOST: f64 = 10.0;
 /// switching to it), so the next pinch moves the pointer at once (turning motion on takes the band
 /// a moment). Then it stops, for the band's battery: the first pinch after a pause waits for it.
 const POINTER_WARM: f64 = 10.0;
+/// The same for a profile that turns the dial or flicks (not a pointer one): longer, since a
+/// volume turn that waits ~0.8 s for motion to start feels dead.
+const MOTION_WARM: f64 = 45.0;
 /// Seconds between two alerts that come close together, so each pattern can be told apart.
 const ALERT_GAP: f64 = 0.5;
 /// Seconds between a ringing call's buzzes (or the pattern and a second, if that's longer).
@@ -465,7 +469,7 @@ impl<'a> Controller<'a> {
                 if message.finger == "index" && !message.synthetic {
                     if message.derived_action == "buttonHold" {
                         // A repeat of the same hold keeps its start (and whether it moved).
-                        self.pointer_warm_until = now + POINTER_WARM;
+                        self.pointer_warm_until = now + if active.as_ref().is_some_and(Active::points) { POINTER_WARM } else { MOTION_WARM };
                         if self.hold.is_none() || now - self.hold_seen > HOLD_LOST {
                             // A flick between the press and the band's hold message counts for the hold.
                             let flicked = self.pinch_down.is_some() && self.flicks.last.is_some();
@@ -619,7 +623,7 @@ impl<'a> Controller<'a> {
         // Wrist motion streams ~70 messages a second: only while a pinch hold can use it, in a
         // profile that has a use for it (the dial, or the pointer).
         let uses_motion = active.as_ref().is_some_and(|a| a.profile().uses_motion(a.kind.host_kind()));
-        let warm = active.as_ref().is_some_and(|a| a.points() || a.profile().flicks(a.kind.host_kind())) && now < self.pointer_warm_until;
+        let warm = active.as_ref().is_some_and(|a| a.points() || a.profile().uses_motion(a.kind.host_kind())) && now < self.pointer_warm_until;
         let pinching = self.hold.is_some() && now - self.hold_seen < HOLD_LOST || self.pinch_down.is_some_and(|at| now - at < HOLD_LOST);
         // The gesture lab shows every pinch's swings, flicks bound or not.
         let want_motion = ((uses_motion || control::lab_on()) && (warm || pinching) && self.menu.is_none())

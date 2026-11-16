@@ -146,6 +146,11 @@ and `tv`, which do what the modes below always did.
   (left/right) and tilt (up/down) directly. They went through handwriting's frame, 37.7° off
   those axes: a turn left or right moved the pointer diagonally, and a clean swing never counted
   as a flick (it has to be 1.8× more one way than the other).
+- **A volume dial that keeps up (v0.16.5):** a gap in the band's motion stream no longer drops the
+  pinch (band-core's dial let go ~170 ms into most holds and stayed dead until the next pinch);
+  6° a step (was 9°), steps up to ~16 a second, and a fast turn keeps its steps. Motion stays on
+  45 s after a pinch in a profile with the dial or flicks (10 s in a pointer profile), so a turn
+  doesn't wait ~0.8 s for it to start.
 - **Siri on an iPhone (v0.16.1):** `media:voice` on `middle.hold` keeps Apple's voice key down on
   a phone while the finger is (at least 0.8 s), the way the side button starts Siri; 0.16.0 and
   earlier pressed it for 15 ms, which iOS ignored outside CarPlay. Computers still get a tap

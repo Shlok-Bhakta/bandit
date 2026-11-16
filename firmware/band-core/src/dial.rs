@@ -36,9 +36,9 @@ impl PinchDial {
     }
 
     pub fn tick(&mut self, now: f64) {
-        if self.last_gyro_at.is_some_and(|at| now - at >= 0.35) {
-            self.index_pressed = None;
-            self.middle_pressed = None;
+        // neural-playground: motion stalled. The dial lets go, but a pinch still held stays held
+        // (its release says when it ends), and engages again once motion flows.
+        if self.engaged && self.last_gyro_at.is_some_and(|at| now - at >= 0.35) {
             self.release();
         }
         if self.middle_pressed.is_some_and(|at| now - at >= 10.0) {
@@ -115,13 +115,10 @@ impl PinchDial {
         self.last_gyro_at = Some(now);
         let previous = match previous {
             Some(previous) if timestamp > previous && timestamp - previous <= 50_000 => previous,
-            _ => {
-                if self.engaged {
-                    self.index_pressed = None;
-                    self.release();
-                }
-                return None;
-            }
+            // neural-playground: a gap (samples lost on the way, or the stream restarted) only
+            // starts the turn again from this sample; it no longer drops the pinch, which left
+            // the dial dead ~170 ms into a hold until the next pinch.
+            _ => return None,
         };
         let dt = (timestamp - previous) as f64 / 1e6;
         let idle = self.index_pressed.is_none() && self.middle_pressed.is_none();
