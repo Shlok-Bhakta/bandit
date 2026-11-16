@@ -44,7 +44,6 @@ static POOL: OnceLock<PoolPtr> = OnceLock::new();
 struct State {
     chan: usize,
     connect_status: Option<i32>,
-    disconnected: bool,
     stalled: bool,
     rx: VecDeque<Vec<u8>>,
     /// Bytes in `rx`, and the most there were since `take_peak`.
@@ -59,7 +58,6 @@ struct State {
 static STATE: Mutex<State> = Mutex::new(State {
     chan: 0,
     connect_status: None,
-    disconnected: false,
     stalled: false,
     rx: VecDeque::new(),
     rx_queued: 0,
@@ -124,20 +122,15 @@ extern "C" fn on_event(event: *mut sys::ble_l2cap_event, _arg: *mut c_void) -> i
             }
             state.connect_status = Some(connect.status);
         }
-        sys::BLE_L2CAP_EVENT_COC_DISCONNECTED => {
-            state.chan = 0;
-            state.disconnected = true;
-        }
+        sys::BLE_L2CAP_EVENT_COC_DISCONNECTED => state.chan = 0,
         sys::BLE_L2CAP_EVENT_COC_DATA_RECEIVED => {
             let receive = unsafe { event.__bindgen_anon_1.receive };
             if !receive.sdu_rx.is_null() {
                 let length = chain_len(receive.sdu_rx);
                 if state.overflowed || state.rx_queued + length > RX_LIMIT {
                     unsafe { sys::os_mbuf_free_chain(receive.sdu_rx) };
-                    if !state.overflowed {
-                        state.overflowed = true;
-                        unsafe { sys::ble_l2cap_disconnect(receive.chan) };
-                    }
+                    // The session sees it and ends, dropping the link (no L2CAP disconnect: `Channel`).
+                    state.overflowed = true;
                     return 0;
                 }
                 let mut data = vec![0u8; length];
@@ -164,6 +157,11 @@ extern "C" fn on_event(event: *mut sys::ble_l2cap_event, _arg: *mut c_void) -> i
     0
 }
 
+/// The channel ends with the link: the caller drops the link, and NimBLE frees the channel with
+/// it. Never `ble_l2cap_disconnect`: the band closes its end as the session ends, and if its
+/// request crosses ours, NimBLE (ESP-IDF 5.3) frees the channel for the band's and then, when the
+/// link drops, deletes it again for ours, reading through a null list (LoadProhibited in
+/// `ble_hs_conn_delete_chan`): a crash, a reboot, the same again on the next session (0.16.0).
 pub struct Channel;
 
 impl Channel {
@@ -248,18 +246,5 @@ impl Channel {
             }
         }
         Ok(())
-    }
-
-    /// Closes the channel and waits (≤ 2 s) for NimBLE to confirm. The pool is never freed.
-    pub fn close(self) {
-        let chan = self.chan();
-        if chan.is_null() {
-            return;
-        }
-        unsafe { sys::ble_l2cap_disconnect(chan) };
-        let started = Instant::now();
-        while !STATE.lock().unwrap().disconnected && started.elapsed() < Duration::from_secs(2) {
-            std::thread::sleep(Duration::from_millis(10));
-        }
     }
 }

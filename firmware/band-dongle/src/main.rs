@@ -489,7 +489,7 @@ async fn run_band(client: &mut esp32_nimble::BLEClient, identity: &EnrollmentIde
     }
     let (sdus, bytes) = channel.stats();
     info!("L2CAP closed after {sdus} SDUs / {bytes} bytes");
-    channel.close();
+    // Dropping the link closes the channel (see `coc::Channel`).
     let _ = client.disconnect();
     closed(client).await;
     result

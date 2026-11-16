@@ -138,6 +138,10 @@ and `tv`, which do what the modes below always did.
   the palm faces (it went diagonal holding a phone). Switching to a `pointer` profile starts the
   gyro right away, and it stops 10 s after the last pinch (was 30), for the band's battery: a
   pointer profile you switch into and out of is the air mouse's mode.
+- **No crash when a band session ends (v0.16.3):** the dongle no longer closes the band's L2CAP
+  channel itself, only drops the link. When the band closed its end at the same moment, NimBLE
+  freed the channel twice and the dongle crashed (LoadProhibited in `ble_hs_conn_delete_chan`),
+  rebooted and did it again on the next session, every few seconds.
 - **Siri on an iPhone (v0.16.1):** `media:voice` on `middle.hold` keeps Apple's voice key down on
   a phone while the finger is (at least 0.8 s), the way the side button starts Siri; 0.16.0 and
   earlier pressed it for 15 ms, which iOS ignored outside CarPlay. Computers still get a tap
