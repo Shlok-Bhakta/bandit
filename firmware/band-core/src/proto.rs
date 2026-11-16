@@ -129,7 +129,7 @@ impl ProtoFields {
         self.values.contains_key(&field)
     }
 
-    /// neural-playground: the single 32-bit fixed value in `field` (a float or fixed32), if any.
+    /// bandit: the single 32-bit fixed value in `field` (a float or fixed32), if any.
     pub fn fixed32(&self, field: u32) -> Option<[u8; 4]> {
         match self.values.get(&field).map(Vec::as_slice) {
             Some([Value::Fixed(bytes)]) if bytes.len() == 4 => Some([bytes[0], bytes[1], bytes[2], bytes[3]]),

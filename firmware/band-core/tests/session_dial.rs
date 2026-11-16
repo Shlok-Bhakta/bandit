@@ -4,7 +4,7 @@ use band_core::events::Event;
 use common::*;
 
 #[test]
-fn encrypted_input_drives_the_dial_and_releases_on_motion_loss() {
+fn encrypted_input_drives_the_dial_through_motion_gaps_until_the_release() {
     let mut peer = Peer::legacy(true, false);
     let first = peer.gyro(1_000_000, 0.0).unwrap();
     assert!(connected(&first) && heartbeat(&first));
@@ -28,18 +28,21 @@ fn encrypted_input_drives_the_dial_and_releases_on_motion_loss() {
     let turn = movement(&held);
     assert!(!turn.is_empty());
     assert!((turn[0] - 0.7).abs() < 1e-9, "first turn {}", turn[0]);
-    // Motion stops arriving: the dial lets go.
+    // Motion stops arriving: the dial lets go, but the pinch is still held...
     assert_eq!(engagement(&peer.session.tick(100.6)), vec![false]);
     assert!(movement(&peer.spin(0.61, 0.61).unwrap()).is_empty());
-    // A gap in the band's own clock lets go too.
-    assert!(engagement(&peer.gesture(1, 0.62).unwrap()).is_empty());
-    assert_eq!(engagement(&peer.spin(0.63, 0.82).unwrap()), vec![true]);
+    // ...so it's back as soon as the band says it's pressed, and turns with the motion.
+    assert_eq!(engagement(&peer.gesture(1, 0.62).unwrap()), vec![true]);
+    assert!(!movement(&peer.spin(0.63, 0.82).unwrap()).is_empty());
+    // A gap in the band's own clock only starts the turn again from the next sample (it used to
+    // drop the pinch, leaving the dial dead until the next one).
     peer.band.stamp += 1_000_000;
-    assert_eq!(engagement(&peer.spin(0.83, 0.83).unwrap()), vec![false]);
-    assert!(movement(&peer.spin(0.84, 0.84).unwrap()).is_empty());
-    // So does the release.
-    assert!(engagement(&peer.gesture(1, 0.85).unwrap()).is_empty());
-    assert_eq!(engagement(&peer.spin(0.86, 1.05).unwrap()), vec![true]);
+    let gap = peer.spin(0.83, 0.83).unwrap();
+    assert!(engagement(&gap).is_empty() && movement(&gap).is_empty());
+    let after = movement(&peer.spin(0.84, 0.84).unwrap());
+    assert!(after.len() == 1 && (after[0] - 0.7).abs() < 1e-9, "turn after the gap {after:?}");
+    // The release lets go.
+    assert!(!movement(&peer.spin(0.86, 1.05).unwrap()).is_empty());
     assert_eq!(engagement(&peer.gesture(2, 1.06).unwrap()), vec![false]);
     assert!(movement(&peer.spin(1.07, 1.07).unwrap()).is_empty());
 }

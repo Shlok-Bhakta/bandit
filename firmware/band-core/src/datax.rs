@@ -54,11 +54,11 @@ fn without_padding(record: &[u8]) -> &[u8] {
     }
 }
 
-/// neural-playground: the largest frame accepted. The band's are a few hundred bytes; a
+/// bandit: the largest frame accepted. The band's are a few hundred bytes; a
 /// header claiming more (up to 32 KB) means the reading lost its place, and waiting for it
 /// held every later record (on the dongle, until the heap ran out).
 pub const MAX_FRAME: usize = 8192;
-/// neural-playground: how much of each recent record is kept for the log.
+/// bandit: how much of each recent record is kept for the log.
 const RECENT_BYTES: usize = 256;
 
 /// Reassembles frames that span several decrypted 16-byte-aligned records.
@@ -131,7 +131,7 @@ impl DataXReceiver {
         Ok(frames)
     }
 
-    /// neural-playground: `feed` in two steps, so a record's frames can be handled one at a
+    /// bandit: `feed` in two steps, so a record's frames can be handled one at a
     /// time instead of all held at once: push the record, then take `next_frame` until `None`.
     pub fn push(&mut self, plaintext: &[u8]) -> Result<()> {
         if plaintext.is_empty() || !plaintext.len().is_multiple_of(16) {

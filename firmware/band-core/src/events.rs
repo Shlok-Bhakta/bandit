@@ -61,7 +61,7 @@ impl BatteryStatus {
     }
 }
 
-/// neural-playground: the rest of `batteryData`, as firmware 1054928927 sends it (names inferred:
+/// bandit: the rest of `batteryData`, as firmware 1054928927 sends it (names inferred:
 /// field 3 a float in °C, 4 millivolts, 5 a signed current in mA, negative while charging, 6 a
 /// counter). For measuring what the band's states cost.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -196,7 +196,7 @@ pub enum Event {
     CeremonyStage(String),
     /// The session needs an ownership HTTP exchange; resume it with
     /// `BandSession::ceremony_pair_request_completed` / `ceremony_pair_completed`.
-    /// Boxed (neural-playground), as is `CeremonyCompleted`: they're rare and large, and every
+    /// Boxed (bandit), as is `CeremonyCompleted`: they're rare and large, and every
     /// event was their size (176 bytes on the ESP32).
     CeremonyHttp(Box<CeremonyHttpRequest>),
     /// The band confirmed this host as owner. Persist the identity; trust setup continues.

@@ -29,9 +29,9 @@ use crate::ota::{OtaItemProgress, OtaJob, OtaPlan, OtaStatus};
 use crate::proto::{ProtoFields, field_bytes, field_int};
 
 const STREAM_FIELDS: [u32; 3] = [3, 6, 8];
-/// neural-playground: the longest setup message accepted before encryption.
+/// bandit: the longest setup message accepted before encryption.
 const MAX_SETUP_MESSAGE: usize = 2048;
-/// neural-playground: diagnostics lines kept until `take_diagnostics`.
+/// bandit: diagnostics lines kept until `take_diagnostics`.
 const MAX_DIAGNOSTICS: usize = 128;
 /// The request id of [`BandSession::request_active`], apart from the counted ones.
 const ACTIVE_REQUEST: u64 = 1 << 20;
@@ -245,7 +245,7 @@ pub struct BandSession {
     battery_unavailable: bool,
     raw_emg: bool,
     raw_requested: bool,
-    /// neural-playground: describe every gesture message in full (the dongle's gesture lab).
+    /// bandit: describe every gesture message in full (the dongle's gesture lab).
     describe_gestures: bool,
     config_service_opened: bool,
     raw_request_id: u64,
@@ -277,16 +277,16 @@ pub struct BandSession {
     /// Gyro and orientation are paused for an update: less traffic from the band while it
     /// acknowledges chunks (with them on, build 64 updates kept losing their place).
     ota_quiet: bool,
-    /// neural-playground: gyro and orientation off because the caller doesn't need them (they
+    /// bandit: gyro and orientation off because the caller doesn't need them (they
     /// stream ~70 messages a second, a large part of the band's radio time).
     motion_off: bool,
-    /// neural-playground: the caller turns motion on and off ([`Self::set_motion`]), so a
+    /// bandit: the caller turns motion on and off ([`Self::set_motion`]), so a
     /// subscription answer may predate the latest change: only the gesture flag is checked.
     motion_managed: bool,
-    /// neural-playground: `HANDWRITING_OFF_FIELDS` as the band's config read reported them
+    /// bandit: `HANDWRITING_OFF_FIELDS` as the band's config read reported them
     /// (absent: 0), to restore when handwriting stops. None before the config read.
     standby_config: Option<Vec<(u32, u64)>>,
-    /// neural-playground: the last battery answer's detail ([`Self::battery_detail`]).
+    /// bandit: the last battery answer's detail ([`Self::battery_detail`]).
     battery_detail: Option<BatteryDetail>,
     /// Debug: the band's own handwriting ([`BandSession::set_band_handwriting`]), and what it sent.
     band_handwriting: Option<BandHandwriting>,
@@ -403,7 +403,7 @@ impl BandSession {
         self
     }
 
-    /// neural-playground: subscribe without gyro and orientation; [`Self::set_motion`] turns
+    /// bandit: subscribe without gyro and orientation; [`Self::set_motion`] turns
     /// them on when needed.
     pub fn without_motion(mut self) -> Self {
         self.motion_off = true;
@@ -411,7 +411,7 @@ impl BandSession {
         self
     }
 
-    /// neural-playground: gyro and orientation on or off (the gesture stream stays on); the
+    /// bandit: gyro and orientation on or off (the gesture stream stays on); the
     /// bytes to write, nothing if it's already so or the streams aren't up yet (the
     /// subscription then follows this setting).
     pub fn set_motion(&mut self, on: bool) -> Result<Vec<u8>> {
@@ -426,7 +426,7 @@ impl BandSession {
         self.stream_request(3, Some(true))
     }
 
-    /// neural-playground: temperature, voltage and current from the last battery answer (it
+    /// bandit: temperature, voltage and current from the last battery answer (it
     /// comes with each [`Event::BatteryStatus`]).
     pub fn battery_detail(&self) -> Option<BatteryDetail> {
         self.battery_detail
@@ -437,7 +437,7 @@ impl BandSession {
         !self.motion_off
     }
 
-    /// neural-playground: the band reports a held index pinch (its "buttonHold") whose motion
+    /// bandit: the band reports a held index pinch (its "buttonHold") whose motion
     /// [`Self::set_motion`] only now turns on: the pinch dial arms once gyro flows.
     pub fn arm_dial(&mut self, now: f64) {
         self.dial.arm_held(now);
@@ -448,7 +448,7 @@ impl BandSession {
         self.guessing.then_some(self.scheme_guess)
     }
 
-    /// neural-playground: every gesture message's fields, as `LAB fields <finger> <action>
+    /// bandit: every gesture message's fields, as `LAB fields <finger> <action>
     /// <derived>: …` diagnostics (to find what else the band says, like pressure).
     pub fn set_describe_gestures(&mut self, on: bool) {
         self.describe_gestures = on;
@@ -502,7 +502,7 @@ impl BandSession {
         std::mem::take(&mut self.diagnostics)
     }
 
-    /// neural-playground: a diagnostics line, unless `MAX_DIAGNOSTICS` wait to be taken (a
+    /// bandit: a diagnostics line, unless `MAX_DIAGNOSTICS` wait to be taken (a
     /// caller that takes them rarely, or a burst of skipped frames, mustn't grow them unbounded).
     fn note(&mut self, line: String) {
         if self.diagnostics.len() < MAX_DIAGNOSTICS {
@@ -627,7 +627,7 @@ impl BandSession {
         Ok(FeedResult { outgoing, events })
     }
 
-    /// neural-playground: [`Self::feed`] that hands each event to `sink` as it's decoded and
+    /// bandit: [`Self::feed`] that hands each event to `sink` as it's decoded and
     /// returns the bytes to write. One record can carry a few KB of motion (hundreds of
     /// events), which as one `Vec<Event>` was a block the dongle's heap didn't have.
     pub fn feed_into(&mut self, bytes: &[u8], time: f64, sink: &mut dyn FnMut(Event)) -> Result<Vec<u8>> {
@@ -645,7 +645,7 @@ impl BandSession {
             if size < 8 {
                 return Err(perr("Invalid band setup length"));
             }
-            // neural-playground: setup messages are a few hundred bytes; don't wait for 32 KB.
+            // bandit: setup messages are a few hundred bytes; don't wait for 32 KB.
             if size > MAX_SETUP_MESSAGE {
                 return Err(perr(format!("Band setup message too long ({size} bytes)")));
             }
@@ -1623,7 +1623,7 @@ impl BandSession {
                 .iter()
                 .flat_map(|&field| field_int(field, u64::from(on && !(quiet && MOTION_FIELDS.contains(&field)))))
                 // The model's raw output (field 4), only while the band writes.
-                // neural-playground: with 22 and 23, which the model output needs (kinesis, rokid-lumen).
+                // bandit: with 22 and 23, which the model output needs (kinesis, rokid-lumen).
                 .chain(inference.map_or_else(Vec::new, |write| {
                     [4, 22, 23].iter().flat_map(|&field| field_int(field, u64::from(on && write))).collect()
                 }))
@@ -1656,7 +1656,7 @@ impl BandSession {
         outgoing: &mut Vec<u8>,
     ) -> Result<Vec<Event>> {
         if let Some(&kind) = frame.words.last() {
-            // neural-playground: the band uses about ten; each costs heap on a dongle.
+            // bandit: the band uses about ten; each costs heap on a dongle.
             if self.channel_types.len() >= 64 && !self.channel_types.contains_key(&frame.channel)
             {
                 return Err(perr("Too many band input channels"));
@@ -1666,7 +1666,7 @@ impl BandSession {
         let Some(&kind) = self.channel_types.get(&frame.channel) else {
             return Ok(Vec::new());
         };
-        // neural-playground: updated firmware (1054928927) sends its log lines and error words on
+        // bandit: updated firmware (1054928927) sends its log lines and error words on
         // the channels it answers on, and names a channel's kind only when it changes, so an answer
         // can follow one of those unnamed. An unnamed frame shaped like an answer (request id and
         // status, fields 1 and 2) is one; a log line (field 3 only) isn't.
@@ -1718,7 +1718,7 @@ impl BandSession {
                     return Ok(Vec::new());
                 }
                 self.battery_request = None;
-                // neural-playground: the band's temperature, voltage and current, for power measurements.
+                // bandit: the band's temperature, voltage and current, for power measurements.
                 self.battery_detail = BatteryDetail::from_response(&frame.payload).ok();
                 return Ok(vec![Event::BatteryStatus(
                     BatteryStatus::from_response(&frame.payload).ok(),
@@ -1772,7 +1772,7 @@ impl BandSession {
                         if let Some((index, margin)) = handwriting.decoder.push(chunk) {
                             let shown = if index == PAUSE { "pause" } else { symbol(index) };
                             handwriting.tokens.push((index, shown, margin));
-                            // neural-playground: 128, not 500 (8 KB of a dongle's heap, for debug).
+                            // bandit: 128, not 500 (8 KB of a dongle's heap, for debug).
                             if handwriting.tokens.len() > 128 {
                                 handwriting.tokens.drain(..32);
                             }
@@ -2195,7 +2195,7 @@ mod device_info_tests {
 }
 
 /// The `ConfigReq` that turns the band's handwriting on (HANDWRITING_CC, standby fields off) or
-/// off (ACTIVE; neural-playground: with the standby fields as the config read found them, so the
+/// off (ACTIVE; bandit: with the standby fields as the config read found them, so the
 /// band can save power again).
 fn handwriting_config(on: bool, saved: Option<&[(u32, u64)]>) -> Vec<u8> {
     if on {

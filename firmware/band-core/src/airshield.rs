@@ -268,7 +268,7 @@ impl AirShieldReceiver {
     pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
         self.pending.extend_from_slice(bytes);
         let mut plaintext = Vec::new();
-        // neural-playground: read with an offset and drop what was read once at the end, not
+        // bandit: read with an offset and drop what was read once at the end, not
         // record by record (each drain moved the rest of a burst).
         let mut at = 0;
         let result = loop {
@@ -324,7 +324,7 @@ impl AirShieldReceiver {
         result.map(|()| plaintext)
     }
 
-    /// neural-playground: `skipped` is drained only when the session's diagnostics are taken,
+    /// bandit: `skipped` is drained only when the session's diagnostics are taken,
     /// so it's capped for a caller that never takes them.
     fn skip(&mut self, line: String) {
         if self.skipped.len() < 64 {

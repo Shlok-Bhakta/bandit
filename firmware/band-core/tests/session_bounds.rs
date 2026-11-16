@@ -1,4 +1,4 @@
-//! neural-playground: what a burst from the band costs, and how much a misbehaving stream can hold.
+//! bandit: what a burst from the band costs, and how much a misbehaving stream can hold.
 
 mod common;
 

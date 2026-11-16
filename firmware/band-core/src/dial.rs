@@ -36,7 +36,7 @@ impl PinchDial {
     }
 
     pub fn tick(&mut self, now: f64) {
-        // neural-playground: motion stalled. The dial lets go, but a pinch still held stays held
+        // bandit: motion stalled. The dial lets go, but a pinch still held stays held
         // (its release says when it ends), and engages again once motion flows.
         if self.engaged && self.last_gyro_at.is_some_and(|at| now - at >= 0.35) {
             self.release();
@@ -58,7 +58,7 @@ impl PinchDial {
         }
     }
 
-    /// neural-playground: the band says the index pinch is a hold (its "buttonHold"), and the
+    /// bandit: the band says the index pinch is a hold (its "buttonHold"), and the
     /// caller only now turned motion on for it. Arms once gyro flows, as if the press had come
     /// `ARM_DELAY` ago with motion fresh: a hold is no tap. Motion from before is forgotten (it
     /// stopped, or is about to restart with a gap in the band's clock), so neither its staleness
@@ -115,7 +115,7 @@ impl PinchDial {
         self.last_gyro_at = Some(now);
         let previous = match previous {
             Some(previous) if timestamp > previous && timestamp - previous <= 50_000 => previous,
-            // neural-playground: a gap (samples lost on the way, or the stream restarted) only
+            // bandit: a gap (samples lost on the way, or the stream restarted) only
             // starts the turn again from this sample; it no longer drops the pinch, which left
             // the dial dead ~170 ms into a hold until the next pinch.
             _ => return None,

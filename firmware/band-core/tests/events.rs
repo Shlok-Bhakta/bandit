@@ -72,7 +72,7 @@ fn event_debug_never_prints_raw_emg_bytes() {
     assert!(!text.contains("171"), "{text}");
 }
 
-/// neural-playground: no event is larger than a gesture (the ceremony's are boxed): a record of
+/// bandit: no event is larger than a gesture (the ceremony's are boxed): a record of
 /// motion is hundreds of events.
 #[test]
 fn an_event_is_no_larger_than_a_gesture() {
