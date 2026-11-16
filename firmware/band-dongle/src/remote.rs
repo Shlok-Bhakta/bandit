@@ -228,7 +228,15 @@ struct Host {
     /// Switched by the app in front (`app_changed`): the profile to go back to for an app no
     /// profile lists. Not saved: the host's helper says which app is in front when it reconnects.
     home: Option<String>,
+    /// The profiles it went up from, deepest last (`profile:back` returns to the last): at most
+    /// `MODE_DEPTH`. Not saved: a reconnect starts at the saved profile with nothing to go back to.
+    stack: Vec<String>,
+    /// The app in front, as its helper last said (`profile:app` goes up into its profile).
+    app: Option<String>,
 }
+
+/// How many profiles `profile:back` can retrace: two levels above home.
+const MODE_DEPTH: usize = 2;
 
 #[derive(Clone)]
 struct Known {
@@ -490,7 +498,7 @@ impl Remote {
         };
         info!("HOST: {} connected ({:?}, handle {})", name, desc.address(), desc.conn_handle());
         state.hosts.retain(|host| host.handle != desc.conn_handle());
-        state.hosts.push(Host { handle: desc.conn_handle(), addr: None, kind, name, ready: false, profile: String::new(), home: None });
+        state.hosts.push(Host { handle: desc.conn_handle(), addr: None, kind, name, ready: false, profile: String::new(), home: None, stack: Vec::new(), app: None });
     }
 
     fn disconnected(&self, desc: &BLEConnDesc, reason: Result<(), esp32_nimble::BLEError>) {
@@ -677,17 +685,38 @@ impl Remote {
         let active = state.active == Some(handle);
         let Some(host) = state.hosts.iter().find(|host| host.handle == handle && host.ready) else { return Err(format!("no connected host {handle}")) };
         let (kind, current) = (host.kind.host_kind(), state.effective(&set, host));
+        let home = set.start_for(kind);
         let index = match target {
             ProfileTarget::Index(index) => index,
             ProfileTarget::Next | ProfileTarget::Previous => set.step(current, target == ProfileTarget::Next, kind)
                 .ok_or_else(|| format!("{} has no other profile it can use", host.name))?,
+            ProfileTarget::Home => home,
+            // A profile the set no longer has (or this kind can't use) is skipped, down to home.
+            ProfileTarget::Back => host.stack.iter().rev().filter_map(|id| set.index_of(id)).find(|i| set.profiles[*i].allows(kind)).unwrap_or(home),
+            ProfileTarget::App => host.app.as_deref().and_then(|app| set.for_app(app, kind))
+                .ok_or_else(|| format!("no profile lists the app in front on {}", host.name))?,
         };
         let profile = set.profiles.get(index).ok_or_else(|| format!("no profile {index}"))?;
         if !profile.allows(kind) { return Err(format!("{} isn't for {} ({})", profile.name, host.name, host.kind.word())); }
         let host = state.hosts.iter_mut().find(|host| host.handle == handle).expect("found above");
-        host.profile = profile.id.clone();
-        // Chosen by hand: it stays until the next app that a profile lists.
-        host.home = None;
+        let came_from = std::mem::replace(&mut host.profile, profile.id.clone());
+        match target {
+            _ if index == home => host.stack.clear(),
+            ProfileTarget::Back => {
+                // Down to the one it went back to (and past any skipped above it).
+                while host.stack.pop().is_some_and(|id| id != profile.id) {}
+            }
+            // Sideways: the same level.
+            ProfileTarget::Next | ProfileTarget::Previous => {}
+            _ if index != current => {
+                host.stack.push(if came_from.is_empty() { set.profiles[current].id.clone() } else { came_from });
+                if host.stack.len() > MODE_DEPTH { host.stack.remove(0); }
+            }
+            _ => {}
+        }
+        // Chosen by hand: it stays until the next app that a profile lists. Up into the app's
+        // profile, it follows the app as the app's own switch would (out when the app is).
+        host.home = if target == ProfileTarget::App { host.stack.last().cloned() } else { None };
         let (addr, name) = (host.addr, host.name.clone());
         if let Some(i) = addr.and_then(|addr| state.known_index(addr)) { state.known[i].profile = profile.id.clone(); }
         if active { state.profile_switched = Some(profile.buzz.clone()); }
@@ -710,6 +739,7 @@ impl Remote {
         let Some(position) = state.hosts.iter().position(|host| host.handle == handle && host.ready) else { return Err(format!("no connected host {handle}")) };
         let current = state.effective(&set, &state.hosts[position]);
         let host = &mut state.hosts[position];
+        host.app = Some(app.to_string());
         let target = match set.for_app(app, host.kind.host_kind()) {
             Some(index) => {
                 host.home.get_or_insert_with(|| set.profiles[current].id.clone());
@@ -723,6 +753,9 @@ impl Remote {
         if target == current { return Ok(()); }
         let profile = &set.profiles[target];
         host.profile = profile.id.clone();
+        // Up into the app's profile from where it was (`profile:back` returns there); out of it,
+        // back where it was, with nothing above.
+        host.stack = if host.home.is_some() { vec![set.profiles[current].id.clone()] } else { Vec::new() };
         let name = host.name.clone();
         // No buzz: it follows every app switch, and you can see which app you're in.
         state.generation += 1;

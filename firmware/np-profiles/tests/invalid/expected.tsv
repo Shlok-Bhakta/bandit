@@ -30,3 +30,7 @@ unknown-band-event.json	profiles[0].gestures.band.pinky.tap
 hold-on-flick.json	profiles[0].gestures.flick.up
 bad-apps.json	profiles[0].gestures.flick.up
 too-deep.json	
+point-on-tap.json	profiles[0].gestures.index.tap
+reserved-id.json	profiles[0].id
+everywhere-gesture.json	everywhere.wave
+menu-point.json	menu.p

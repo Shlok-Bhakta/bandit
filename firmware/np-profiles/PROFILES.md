@@ -65,10 +65,11 @@ earlier firmware did.
 | `format` | required | `"np-profiles"` |
 | `version` | required | `1` |
 | `name` | optional | Up to 40 characters, shown in the app |
-| `menu` | optional | The letter menu: one letter or digit (`a`–`z`, `0`–`9`) → an action (anything but `hold:` and `menu`). Letters you write that aren't here get one long buzz |
+| `menu` | optional | The letter menu: one letter or digit (`a`–`z`, `0`–`9`) → an action (anything but `hold:`, `mouse:point` and `menu`). Letters you write that aren't here get one long buzz |
 | `start` | optional | The profile a host starts in, by `phone`, `computer` and `tv`. Each must allow that kind. Default: the first profile that allows it |
 | `buzzes` | optional | Your own buzz patterns, by name (below). Up to 16 |
 | `feedback` | optional | What the band buzzes by itself, by moment: a pattern's name, or `none` (below) |
+| `everywhere` | optional | Gesture → binding, in every profile, winning over a profile's own (Modes, below; firmware 0.17) |
 | `profiles` | required | 1–12 profiles |
 
 **A profile:**
@@ -151,13 +152,16 @@ when there's a default. Keys are `phone`, `computer`, `mac`, `windows`, `linux`,
 | `media:voice` | Apple's microphone key: dictation on a Mac, Siri on an iPhone | All |
 | `phoneMute` | A headset's phone-mute button (mutes a call) | Phone |
 | `call:answer` · `call:end` | Answers the ringing call; declines it, or hangs up the call in progress. iPhone (it shares its notifications with the dongle: see below) | Phone |
+| `call:toggle` | One gesture for both: answers a ringing call, else hangs up the one in progress. Works whichever host is active (firmware 0.17) | Phone |
 | `key:<chord>` | A key with modifiers, pressed and released: `key:enter`, `key:cmd+shift+m`, `key:ctrl+alt+delete`, `key:f5`, `key:]` | Computer, TV |
 | `hold:<chord>` | Pressed while `middle.hold` lasts (push-to-talk), released with the finger, or after 60 s | Computer, TV |
 | `type:<text>` | Types 1–64 printable ASCII characters (US layout) | Computer, TV |
 | `mouse:click` · `mouse:rightClick` · `mouse:middleClick` | Mouse buttons | Computer, iPhone (AssistiveTouch on; firmware 0.16) |
+| `mouse:point` | `middle.hold` only: the air mouse while the finger is held (turn the forearm to move it), off when it lets go. Index taps in the next 3 s click where it stopped (firmware 0.17) | Computer, iPhone (AssistiveTouch on) |
 | `mouse:button4` … `mouse:button8` | Extra mouse buttons. A computer: 4 is back, 5 forward. An iPhone with AssistiveTouch: give each one an action (Settings › Accessibility › Touch › AssistiveTouch › Devices: Home, App Switcher, Control Center, Notification Center, Screenshot, Lock Screen, Siri, a Shortcut...). Firmware 0.16 | Computer, iPhone |
 | `mouse:scrollUp` · `mouse:scrollDown`, optionally `:<1–20>` | Wheel steps (default 4) | Computer, iPhone |
-| `profile:<id>` · `profile:next` · `profile:previous` | Switch this host's profile (`next`/`previous` skip profiles it can't use) | |
+| `profile:<id>` · `profile:next` · `profile:previous` | Switch this host's profile (`next`/`previous` skip profiles it can't use, and stay on the same level: see Modes) | |
+| `profile:back` · `profile:home` · `profile:app` | Modes (firmware 0.17): back down to the profile this one was entered from (home if none; at home, home's buzz again); straight home; up into the profile listing the computer's app in front | |
 | `host:next` · `host:previous` | Send gestures to the next or previous connected host | |
 | `host:<kind>` | To the first connected host of a kind: `host:phone`, `host:computer`, `host:mac`, `host:tv`, … | |
 | `menu` | Opens the letter menu | |
@@ -180,6 +184,30 @@ everywhere. Keys:
 - any US-keyboard symbol: `- = [ ] \ ; ' ` , . /`, and their shifted versions `_ + { } | : " ~ < > ? ! @ # $ % ^ & * ( )`.
 
 `key:cmd++` is ⌘ and plus.
+
+## Modes and `everywhere`
+
+Firmware 0.17 treats profiles as modes, with a way back. **Home** is the host's start profile
+(`start`). Going up, to a profile by id, `profile:app` or the menu, remembers where you came
+from (two levels at most); `profile:back` goes back down one, and from anywhere, backing out
+enough lands at home, which plays home's own `buzz` (give it a pattern nothing else uses).
+`profile:next` / `previous` move sideways, on the same level. The app in front still switches a
+computer's profile by itself; back from there goes to where it was, and `profile:app` goes up
+into it again.
+
+`everywhere` (optional, at the top of the file) binds gestures in every profile, the way a
+profile's `gestures` do, and wins over a profile's own binding for the kinds of host it covers
+(a `computer`-only one leaves the phone the profile's own). Keep it for what must never change:
+
+```json
+"everywhere": {
+  "flick.down": "profile:back",
+  "flick.up": { "computer": "profile:app" },
+  "middle.tripleTap": "call:toggle"
+}
+```
+
+Profile ids can't be `next`, `previous`, `back`, `home` or `app` (they mean those targets).
 
 ## Buzz patterns
 

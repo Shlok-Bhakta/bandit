@@ -1,0 +1,19 @@
+{
+  "format": "np-profiles",
+  "version": 1,
+  "name": "Modes",
+  "buzzes": { "home": "150*90 _120 50*45 _90 50*45" },
+  "start": { "phone": "base", "computer": "base" },
+  "everywhere": {
+    "flick.down": "profile:back",
+    "flick.up": { "computer": "profile:app" },
+    "middle.tripleTap": "call:toggle"
+  },
+  "menu": { "h": "profile:home", "c": "profile:copilot" },
+  "profiles": [
+    { "id": "base", "name": "Home", "buzz": "home",
+      "gestures": { "middle.hold": "mouse:point", "flick.up": { "phone": "mouse:button7" }, "flick.down": "media:volumeDown", "flick.right": "host:next" } },
+    { "id": "copilot", "name": "Copilot", "buzz": 2, "hosts": ["computer"], "apps": ["com.github.copilot"],
+      "gestures": { "swipe.down": "key:pagedown", "middle.doubleTap": "profile:previous" } }
+  ]
+}

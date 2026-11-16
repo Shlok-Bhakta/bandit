@@ -229,8 +229,8 @@ fn the_buzzes_vector_resolves() {
     assert_eq!(car.buzz, set.pattern("rise").unwrap());
     assert_eq!(car.action(Gesture::FlickUp, HostKind::Phone), Some(&Action::Media(Media::VolumeUp)));
     assert_eq!(car.action(Gesture::FlickUp, HostKind::Mac), None);
-    assert_eq!(car.buzz(Gesture::FlickLeft), Some(&zap));
-    assert_eq!(car.buzz(Gesture::FlickRight), None);
+    assert_eq!(car.buzz(Gesture::FlickLeft, HostKind::Phone), Some(&zap));
+    assert_eq!(car.buzz(Gesture::FlickRight, HostKind::Phone), None);
     assert!(car.uses_motion(HostKind::Phone) && car.flicks(HostKind::Phone));
     assert_eq!(car.band_events().count(), 4);
     assert_eq!(car.action(Gesture::from_name("band.wake").unwrap(), HostKind::Phone), None);
@@ -239,4 +239,23 @@ fn the_buzzes_vector_resolves() {
     assert_eq!(desk.action(Gesture::FlickRight, HostKind::Mac), Some(&Action::Apps(true)));
     assert!(!desk.flicks(HostKind::Mac), "a pointer profile's pinch moves the pointer");
     assert_eq!(set.profiles[2].buzz, set.pattern("tap").unwrap(), "null is the default");
+}
+
+#[test]
+fn modes_everywhere_bindings_win_for_the_kinds_they_cover() {
+    let set = ProfileSet::parse(&vectors("valid").into_iter().find(|(n, _)| n == "modes.json").unwrap().1).unwrap();
+    let (home, copilot) = (&set.profiles[0], &set.profiles[1]);
+    for profile in [home, copilot] {
+        assert_eq!(profile.action(Gesture::FlickDown, HostKind::Mac), Some(&Action::Profile(ProfileTarget::Back)));
+        assert_eq!(profile.action(Gesture::MiddleTripleTap, HostKind::Phone), Some(&Action::Call(Call::Toggle)));
+        assert_eq!(profile.action(Gesture::FlickUp, HostKind::Mac), Some(&Action::Profile(ProfileTarget::App)));
+    }
+    // Everywhere's flick.up is for computers: the phone keeps home's own.
+    assert_eq!(home.action(Gesture::FlickUp, HostKind::Phone), Some(&Action::Click(Button::Extra(7))));
+    assert_eq!(home.action(Gesture::FlickDown, HostKind::Phone), Some(&Action::Profile(ProfileTarget::Back)), "everywhere beats home's own");
+    assert_eq!(home.action(Gesture::MiddleHold, HostKind::Mac), Some(&Action::Point));
+    assert!(copilot.flicks(HostKind::Mac), "everywhere's flicks count as the profile's");
+    assert_eq!(copilot.max_taps(Finger::Middle, HostKind::Mac), 3, "middle taps wait for call:toggle's third");
+    assert_eq!(set.menu.get(&'h'), Some(&Action::Profile(ProfileTarget::Home)));
+    assert_eq!(home.buzz, set.pattern("home").unwrap());
 }

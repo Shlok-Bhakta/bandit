@@ -151,6 +151,14 @@ and `tv`, which do what the modes below always did.
   6° a step (was 9°), steps up to ~16 a second, and a fast turn keeps its steps. Motion stays on
   45 s after a pinch in a profile with the dial or flicks (10 s in a pointer profile), so a turn
   doesn't wait ~0.8 s for it to start.
+- **Modes (v0.17.0):** profiles stack like modes. `profile:back` returns to the profile this one
+  was entered from (home if none; at home it buzzes home again), `profile:home` goes straight
+  home (the host's start profile), and `profile:app` goes up into the profile of the computer's
+  app in front, the same one the app's own switch picks. Up to two levels are remembered. A set's
+  `everywhere` bindings work in every profile (they win over its own): big gestures, flicks, for
+  getting around, the fingers for the profile itself. `call:toggle` answers a ringing call or
+  hangs up the one in progress, and `mouse:point` on `middle.hold` is the air mouse only while
+  held (an index tap in the next 3 s clicks).
 - **Siri on an iPhone (v0.16.1):** `media:voice` on `middle.hold` keeps Apple's voice key down on
   a phone while the finger is (at least 0.8 s), the way the side button starts Siri; 0.16.0 and
   earlier pressed it for 15 ms, which iOS ignored outside CarPlay. Computers still get a tap

@@ -344,6 +344,8 @@ pub enum Call {
     Answer,
     /// Declines the ringing call, else hangs up the one in progress.
     End,
+    /// One gesture for both: answers the ringing call, else hangs up the one in progress.
+    Toggle,
 }
 
 /// A key with modifiers, as HID usages (keyboard page 0x07). `cmd` is GUI: the dongle sends it as
@@ -359,7 +361,18 @@ pub mod modifiers {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProfileTarget { Index(usize), Next, Previous }
+pub enum ProfileTarget {
+    Index(usize),
+    Next,
+    Previous,
+    /// Back down one level: the profile this one was entered from (`profile:back`). Home if there
+    /// is none, and at home the home buzz again, so backing out always ends somewhere known.
+    Back,
+    /// Straight home: the host's start profile (`start`), whatever was entered on the way.
+    Home,
+    /// Up into the profile that lists the computer's app in front (`apps`).
+    App,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostTarget { Next, Previous, Kind(Hosts) }
@@ -393,6 +406,10 @@ pub enum Action {
     /// (`false`). In a pinch hold (a flick) ⌘ stays down until the pinch lets go, so flicking again
     /// moves on through the apps.
     Apps(bool),
+    /// The air mouse while the gesture is held (`middle.hold` only): the wrist moves the pointer
+    /// until the finger lets go, and an index tap just after clicks (computers, and iPhones with
+    /// AssistiveTouch).
+    Point,
 }
 
 /// What one gesture does: a default, and variants for kinds of host.
@@ -428,20 +445,29 @@ pub struct Profile {
     pub gestures: BTreeMap<Gesture, Binding>,
     /// Computer apps (Mac bundle ids) that switch a computer to this profile while in front.
     pub apps: Vec<String>,
+    /// The set's `everywhere` bindings: they win over this profile's own, for the kinds of host
+    /// they cover.
+    pub everywhere: BTreeMap<Gesture, Binding>,
 }
 
 impl Profile {
     pub fn allows(&self, kind: HostKind) -> bool { self.hosts.is_empty() || self.hosts.iter().any(|h| h.matches(kind)) }
 
+    /// The binding a gesture runs on `kind`: the set's `everywhere` one if it covers `kind`, else
+    /// this profile's.
+    pub fn binding(&self, gesture: Gesture, kind: HostKind) -> Option<&Binding> {
+        self.everywhere.get(&gesture).filter(|binding| binding.resolve(kind).is_some()).or_else(|| self.gestures.get(&gesture))
+    }
+
     pub fn action(&self, gesture: Gesture, kind: HostKind) -> Option<&Action> {
-        self.gestures.get(&gesture).and_then(|binding| binding.resolve(kind))
+        self.binding(gesture, kind).and_then(|binding| binding.resolve(kind))
     }
 
     /// The highest tap count bound for `finger` on `kind` (0: none), which decides how long a tap waits.
     pub fn max_taps(&self, finger: Finger, kind: HostKind) -> u8 {
-        self.gestures.iter()
-            .filter_map(|(gesture, binding)| gesture.tap_count().filter(|(f, _)| *f == finger).map(|(_, n)| (n, binding)))
-            .filter(|(_, binding)| binding.resolve(kind).is_some())
+        self.gestures.keys().chain(self.everywhere.keys())
+            .filter_map(|gesture| gesture.tap_count().filter(|(f, _)| *f == finger).map(|(_, n)| (n, *gesture)))
+            .filter(|(_, gesture)| self.action(*gesture, kind).is_some())
             .map(|(n, _)| n).max().unwrap_or(0)
     }
 
@@ -457,11 +483,11 @@ impl Profile {
 
     /// The `band.` gestures bound here, for matching the band's messages.
     pub fn band_events(&self) -> impl Iterator<Item = BandEvent> + '_ {
-        self.gestures.keys().filter_map(|g| match g { Gesture::Band(b) => Some(*b), _ => None })
+        self.gestures.keys().chain(self.everywhere.keys()).filter_map(|g| match g { Gesture::Band(b) => Some(*b), _ => None })
     }
 
-    /// The pattern a gesture's binding plays when its action runs, if it has its own.
-    pub fn buzz(&self, gesture: Gesture) -> Option<&Pattern> { self.gestures.get(&gesture).and_then(|b| b.buzz.as_ref()) }
+    /// The pattern a gesture's binding plays on `kind` when its action runs, if it has its own.
+    pub fn buzz(&self, gesture: Gesture, kind: HostKind) -> Option<&Pattern> { self.binding(gesture, kind).and_then(|b| b.buzz.as_ref()) }
 
     pub fn types(&self, kind: HostKind) -> bool { self.typing && kind.is_computer() }
     pub fn points(&self, kind: HostKind) -> bool { self.pointer && (kind.is_computer() || kind == HostKind::Phone) }
@@ -479,6 +505,8 @@ pub struct ProfileSet {
     pub buzzes: BTreeMap<String, Pattern>,
     /// What the band buzzes by itself, resolved (None: silent).
     pub feedback: BTreeMap<Feedback, Option<Pattern>>,
+    /// Bindings for every profile (each profile has a copy: `Profile::everywhere`).
+    pub everywhere: BTreeMap<Gesture, Binding>,
 }
 
 impl ProfileSet {
@@ -551,6 +579,9 @@ struct RawFile {
     buzzes: BTreeMap<String, String>,
     #[serde(default)]
     feedback: BTreeMap<String, String>,
+    /// Bindings that work the same in every profile (they win over a profile's own).
+    #[serde(default)]
+    everywhere: BTreeMap<String, Value>,
     profiles: Vec<RawProfile>,
 }
 
@@ -591,10 +622,12 @@ impl RawFile {
         }
         let ids: Vec<&str> = self.profiles.iter().map(|p| p.id.as_str()).collect();
         let names = Names { ids: &ids, buzzes: &buzzes };
+        let everywhere = parse_gestures(&self.everywhere, &names, "everywhere")?;
         let mut profiles = Vec::new();
         for (i, raw) in self.profiles.iter().enumerate() {
             let at = format!("profiles[{i}]");
             if !valid_id(&raw.id) { return Err(Error::new(format!("{at}.id"), "1–16 of a–z, 0–9 and -")); }
+            if RESERVED_IDS.contains(&raw.id.as_str()) { return Err(Error::new(format!("{at}.id"), format!("\"{}\" means something else in profile:… actions: pick another id", raw.id))); }
             if ids[..i].contains(&raw.id.as_str()) { return Err(Error::new(format!("{at}.id"), format!("\"{}\" is used twice", raw.id))); }
             let name_len = raw.name.chars().count();
             if name_len == 0 || name_len > 24 { return Err(Error::new(format!("{at}.name"), "1–24 characters")); }
@@ -621,16 +654,10 @@ impl RawFile {
             }
             let computer = hosts.is_empty() || hosts.iter().any(|h| [HostKind::Mac, HostKind::Windows, HostKind::Linux].iter().any(|k| h.matches(*k)));
             if !raw.apps.is_empty() && !computer { return Err(Error::new(format!("{at}.apps"), "apps are for computers, and this profile isn't")); }
-            let mut gestures = BTreeMap::new();
-            for (name, value) in &raw.gestures {
-                let path = format!("{at}.gestures.{name}");
-                let gesture = Gesture::from_name(name).ok_or_else(|| Error::new(&path, format!(
-                    "unknown gesture (one of {}, or band.<event> / band.<finger>.<event>)", Gesture::ALL.map(Gesture::name).join(", "))))?;
-                gestures.insert(gesture, parse_binding(value, gesture, &names, &path)?);
-            }
+            let gestures = parse_gestures(&raw.gestures, &names, &format!("{at}.gestures"))?;
             profiles.push(Profile {
                 id: raw.id.clone(), name: raw.name.clone(), buzz, hosts,
-                typing: raw.typing, pointer: raw.pointer, gestures, apps: raw.apps.clone(),
+                typing: raw.typing, pointer: raw.pointer, gestures, apps: raw.apps.clone(), everywhere: everywhere.clone(),
             });
         }
         let mut menu = BTreeMap::new();
@@ -640,7 +667,7 @@ impl RawFile {
             let (Some(letter), None) = (chars.next(), chars.next()) else { return Err(Error::new(path, "a menu key is one letter or digit")) };
             if !(letter.is_ascii_lowercase() || letter.is_ascii_digit()) { return Err(Error::new(path, "a menu key is a–z or 0–9")); }
             let action = parse_action_in(text, &names, &path)?;
-            if matches!(action, Action::Hold(_) | Action::Menu) { return Err(Error::new(path, "the menu can't hold a key or open itself")); }
+            if matches!(action, Action::Hold(_) | Action::Point | Action::Menu) { return Err(Error::new(path, "the menu can't hold a key, point or open itself")); }
             menu.insert(letter, action);
         }
         let mut start = [0usize; 3];
@@ -668,7 +695,7 @@ impl RawFile {
         for (moment, _, default) in Feedback::ALL {
             feedback.entry(moment).or_insert_with(|| find_buzz(default, &buzzes));
         }
-        Ok(ProfileSet { name: self.name, profiles, menu, start, buzzes, feedback })
+        Ok(ProfileSet { name: self.name, profiles, menu, start, buzzes, feedback, everywhere })
     }
 }
 
@@ -691,6 +718,9 @@ fn nesting(text: &str) -> usize {
 fn valid_app(app: &str) -> bool {
     (1..=64).contains(&app.len()) && app.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 }
+
+/// `profile:<word>` targets, so no profile may be called these.
+const RESERVED_IDS: [&str; 5] = ["next", "previous", "back", "home", "app"];
 
 fn valid_id(id: &str) -> bool {
     (1..=16).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
@@ -715,12 +745,27 @@ fn unknown_buzz(name: &str) -> String {
     format!("no buzz pattern \"{name}\" (the file's buzzes, or one of {})", BUILTIN_BUZZES.map(|(n, _)| n).join(", "))
 }
 
+/// A `gestures` map (a profile's, or the set's `everywhere`) at `path`.
+fn parse_gestures(raw: &BTreeMap<String, Value>, names: &Names, path: &str) -> Result<BTreeMap<Gesture, Binding>, Error> {
+    let mut gestures = BTreeMap::new();
+    for (name, value) in raw {
+        let path = format!("{path}.{name}");
+        let gesture = Gesture::from_name(name).ok_or_else(|| Error::new(&path, format!(
+            "unknown gesture (one of {}, or band.<event> / band.<finger>.<event>)", Gesture::ALL.map(Gesture::name).join(", "))))?;
+        gestures.insert(gesture, parse_binding(value, gesture, names, &path)?);
+    }
+    Ok(gestures)
+}
+
 fn parse_binding(value: &Value, gesture: Gesture, names: &Names, path: &str) -> Result<Binding, Error> {
     let action = |text: &Value, path: &str| -> Result<Action, Error> {
         let text = text.as_str().ok_or_else(|| Error::new(path, "an action is a string, like \"media:playPause\""))?;
         let action = parse_action_in(text, names, path)?;
         if matches!(action, Action::Hold(_)) && gesture != Gesture::MiddleHold {
             return Err(Error::new(path, "hold: only works on middle.hold (it's released with the finger)"));
+        }
+        if matches!(action, Action::Point) && gesture != Gesture::MiddleHold {
+            return Err(Error::new(path, "mouse:point only works on middle.hold (the pointer moves while it's held)"));
         }
         Ok(action)
     };
@@ -767,7 +812,8 @@ pub fn parse_action_in(text: &str, names: &Names, path: &str) -> Result<Action, 
         "call" => match arg {
             "answer" => Action::Call(Call::Answer),
             "end" => Action::Call(Call::End),
-            _ => return Err(fail(format!("unknown call action \"{arg}\" (call:answer, call:end)"))),
+            "toggle" => Action::Call(Call::Toggle),
+            _ => return Err(fail(format!("unknown call action \"{arg}\" (call:answer, call:end, call:toggle)"))),
         },
         "media" => Action::Media(Media::NAMES.iter().find(|(n, _)| *n == arg).map(|(_, m)| *m).ok_or_else(|| fail(format!(
             "unknown media key \"{arg}\" (one of {})", Media::NAMES.map(|(n, _)| n).join(", "))))?),
@@ -788,17 +834,21 @@ pub fn parse_action_in(text: &str, names: &Names, path: &str) -> Result<Action, 
                 "click" if count.is_empty() => Action::Click(Button::Left),
                 "rightClick" if count.is_empty() => Action::Click(Button::Right),
                 "middleClick" if count.is_empty() => Action::Click(Button::Middle),
+                "point" if count.is_empty() => Action::Point,
                 "scrollUp" => Action::Scroll(steps),
                 "scrollDown" => Action::Scroll(-steps),
                 button => match button.strip_prefix("button").and_then(|n| n.parse::<u8>().ok()) {
                     Some(n @ 4..=8) if count.is_empty() => Action::Click(Button::Extra(n)),
-                    _ => return Err(fail(format!("unknown mouse action \"{arg}\" (click, rightClick, middleClick, button4–button8, scrollUp[:n], scrollDown[:n])"))),
+                    _ => return Err(fail(format!("unknown mouse action \"{arg}\" (click, rightClick, middleClick, button4–button8, scrollUp[:n], scrollDown[:n], point)"))),
                 },
             }
         }
         "profile" => Action::Profile(match arg {
             "next" => ProfileTarget::Next,
             "previous" => ProfileTarget::Previous,
+            "back" => ProfileTarget::Back,
+            "home" => ProfileTarget::Home,
+            "app" => ProfileTarget::App,
             id => ProfileTarget::Index(ids.iter().position(|i| *i == id).ok_or_else(|| fail(format!("no profile \"{id}\"")))?),
         }),
         "host" => Action::Host(match arg {

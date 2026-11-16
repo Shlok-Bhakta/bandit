@@ -1,6 +1,6 @@
 [package]
 name = "band-dongle"
-version = "0.16.5"
+version = "0.17.0"
 edition = "2021"
 description = "Meta Neural Band dongle: connects to the band with its owner key (band-core) and exposes it as system input"
 license = "MIT"

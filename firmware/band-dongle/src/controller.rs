@@ -67,6 +67,11 @@ const POINTER_WARM: f64 = 10.0;
 /// The same for a profile that turns the dial or flicks (not a pointer one): longer, since a
 /// volume turn that waits ~0.8 s for motion to start feels dead.
 const MOTION_WARM: f64 = 45.0;
+/// After the held air mouse (`mouse:point`) lets go, index taps this long click at once (each
+/// tap gives it this long again), instead of running their bindings.
+const POINT_CLICK: f64 = 3.0;
+/// A held air mouse with no word from the band this long (a lost release) stops.
+const POINT_MAX: f64 = 60.0;
 /// Seconds between two alerts that come close together, so each pattern can be told apart.
 const ALERT_GAP: f64 = 0.5;
 /// Seconds between a ringing call's buzzes (or the pattern and a second, if that's longer).
@@ -200,6 +205,10 @@ pub struct Controller<'a> {
     burst: Option<Burst>,
     /// The gyro stays on until then in a pointer profile (`POINTER_WARM`).
     pointer_warm_until: f64,
+    /// Since when `middle.hold`'s `mouse:point` moves the pointer (until the finger lets go).
+    pointing: Option<f64>,
+    /// Index taps click until then (`POINT_CLICK`).
+    click_until: f64,
 }
 
 /// The active host's profile, as the controller needs it.
@@ -225,7 +234,7 @@ impl<'a> Controller<'a> {
             gestures: 0, battery_detail: None, motion: 0, hold: None, last_writing_request: f64::NEG_INFINITY, talking: None, voice: None, taps: Taps::default(), taps_for: remote.generation(),
             menu: None, menu_closed: f64::NEG_INFINITY, quiet_off: false,
             hold_seen: f64::NEG_INFINITY, pointer: Pointer::default(), up: None,
-            write_awake_until: f64::NEG_INFINITY, was_typing: false, burst: None, pointer_warm_until: f64::NEG_INFINITY, arm_dial: false,
+            write_awake_until: f64::NEG_INFINITY, was_typing: false, burst: None, pointer_warm_until: f64::NEG_INFINITY, pointing: None, click_until: f64::NEG_INFINITY, arm_dial: false,
             flicks: Flicks::default(), pinch_down: None, switcher: None, band_fired: Vec::new(), band_seen: Default::default(),
         }
     }
@@ -307,7 +316,11 @@ impl<'a> Controller<'a> {
             Do::Media(key) => self.remote.send(media(*key)),
             Do::PhoneMute => self.remote.send(Action::PhoneMute),
             Do::Call(call) => {
-                let done = match call { np_profiles::Call::Answer => crate::ancs::answer(), np_profiles::Call::End => crate::ancs::end() };
+                let done = match call {
+                    np_profiles::Call::Answer => crate::ancs::answer(),
+                    np_profiles::Call::End => crate::ancs::end(),
+                    np_profiles::Call::Toggle => if crate::ancs::ringing() { crate::ancs::answer() } else { crate::ancs::end() },
+                };
                 if !done { self.buzz_long(now); return false; }
             }
             Do::Key(chord) => self.remote.send(Action::Key { modifiers: chord.modifiers, usage: chord.usage }),
@@ -343,6 +356,8 @@ impl<'a> Controller<'a> {
                 self.menu = Some(Menu { opened: now, writing_since: None });
             }
             Do::Buzz(pattern) => self.play(now, pattern),
+            // Only `middle.hold` points (`event`); elsewhere the check refused it.
+            Do::Point => {}
             Do::Apps(forward) => {
                 let Some(active) = self.active().filter(|a| a.kind.computer()) else {
                     info!("{}: the app switcher is for computers", gesture.name());
@@ -394,7 +409,7 @@ impl<'a> Controller<'a> {
         info!("GESTURE: {} in {}: {action:?}", gesture.name(), active.profile().id);
         if !self.perform(&action, gesture, &active.set, now) { return; }
         // Its own buzz, else the set's `gesture` one (switches and buzzes say enough by themselves).
-        match active.profile().buzz(gesture).cloned() {
+        match active.profile().buzz(gesture, active.kind.host_kind()).cloned() {
             Some(pattern) => self.play(now, &pattern),
             None if !matches!(action, Do::Profile(_) | Do::Host(_) | Do::Buzz(_)) => self.feedback(now, Feedback::Gesture),
             None => {}
@@ -450,6 +465,10 @@ impl<'a> Controller<'a> {
                 if message.finger == "middle" && released {
                     if let Some((handle, _)) = self.talking.take() { self.remote.release(handle); }
                     if let Some(voice) = &mut self.voice { voice.2 = true; }
+                    if self.pointing.take().is_some() {
+                        info!("POINT: off; index taps click for {POINT_CLICK} s");
+                        self.click_until = now + POINT_CLICK;
+                    }
                 }
                 if self.menu.is_some() {
                     // Writing the letter makes the band see pinches and taps: none of them count.
@@ -496,6 +515,13 @@ impl<'a> Controller<'a> {
                     Recognized::Tap(tap @ (Tap::IndexTap | Tap::IndexDoubleTap | Tap::MiddleTap | Tap::MiddleDoubleTap)) => {
                         let finger = if matches!(tap, Tap::IndexTap | Tap::IndexDoubleTap) { Finger::Index } else { Finger::Middle };
                         let double = matches!(tap, Tap::IndexDoubleTap | Tap::MiddleDoubleTap);
+                        // Just after the held air mouse: a tap clicks where it left the pointer.
+                        if finger == Finger::Index && now < self.click_until {
+                            for _ in 0..if double { 2 } else { 1 } { self.remote.click(buttons::LEFT); }
+                            info!("POINT: click");
+                            self.click_until = now + POINT_CLICK;
+                            return;
+                        }
                         self.check_taps();
                         if let Some(count) = self.taps.tap(finger, double, now, taps(finger)) {
                             if let Some(gesture) = Gesture::taps(finger, count) { self.gesture(gesture, now); }
@@ -506,7 +532,7 @@ impl<'a> Controller<'a> {
                     Recognized::Tap(Tap::MiddleHold) => {
                         let Some(action) = active.action(Gesture::MiddleHold).cloned() else { return };
                         // A buzz: it started (speak now, for voice and push-to-talk).
-                        match active.profile().buzz(Gesture::MiddleHold).cloned() {
+                        match active.profile().buzz(Gesture::MiddleHold, active.kind.host_kind()).cloned() {
                             Some(pattern) => self.play(now, &pattern),
                             None => self.feedback(now, Feedback::HoldStart),
                         }
@@ -521,6 +547,12 @@ impl<'a> Controller<'a> {
                                 if self.voice.is_none() {
                                     if let Some(handle) = self.remote.hold_media(MediaKey::Voice) { self.voice = Some((handle, now, false)); }
                                 }
+                            }
+                            Do::Point if active.kind.computer() || active.kind == Kind::Phone => {
+                                info!("GESTURE: middle.hold: the air mouse, while held");
+                                self.pointing = Some(now);
+                                self.pointer.carry = [0.0; 2];
+                                self.pointer_warm_until = now + POINTER_WARM;
                             }
                             action => { info!("GESTURE: middle.hold: {action:?}"); self.perform(&action, Gesture::MiddleHold, &active.set, now); }
                         }
@@ -624,9 +656,10 @@ impl<'a> Controller<'a> {
         // profile that has a use for it (the dial, or the pointer).
         let uses_motion = active.as_ref().is_some_and(|a| a.profile().uses_motion(a.kind.host_kind()));
         let warm = active.as_ref().is_some_and(|a| a.points() || a.profile().uses_motion(a.kind.host_kind())) && now < self.pointer_warm_until;
-        let pinching = self.hold.is_some() && now - self.hold_seen < HOLD_LOST || self.pinch_down.is_some_and(|at| now - at < HOLD_LOST);
+        let pinching = self.hold.is_some() && now - self.hold_seen < HOLD_LOST || self.pinch_down.is_some_and(|at| now - at < HOLD_LOST)
+            || self.pointing.is_some_and(|at| now - at < POINT_MAX);
         // The gesture lab shows every pinch's swings, flicks bound or not.
-        let want_motion = ((uses_motion || control::lab_on()) && (warm || pinching) && self.menu.is_none())
+        let want_motion = ((uses_motion || control::lab_on() || self.pointing.is_some()) && (warm || pinching) && self.menu.is_none())
             || control::FORCE_MOTION.load(std::sync::atomic::Ordering::Relaxed);
         // Motion was off when the pinch began, so band-core's dial wouldn't arm by itself.
         if std::mem::take(&mut self.arm_dial) && want_motion { session.arm_dial(now); }
@@ -749,7 +782,8 @@ impl Controller<'_> {
         let pointer = &mut self.pointer;
         let dt = pointer.last_us.replace(timestamp_us).map(|last| timestamp_us.saturating_sub(last) as f64 / 1e6);
         let Some(dt) = dt.filter(|dt| *dt > 0.0 && *dt <= MAX_DT) else { return };
-        let clutched = points && self.menu.is_none() && self.hold.is_some() && now - self.hold_seen < HOLD_LOST;
+        let clutched = self.menu.is_none()
+            && (points && self.hold.is_some() && now - self.hold_seen < HOLD_LOST || self.pointing.is_some_and(|at| now - at < POINT_MAX));
         pointer.bias.learn(raw, dt);
         if !clutched {
             pointer.carry = [0.0; 2];
