@@ -1,8 +1,8 @@
 import CryptoKit
 import Foundation
 
-/// The ESP32 dongle's private control service ("NP Band Remote"), sans-IO: status, commands,
-/// packages and the update stream. See firmware/band-dongle/CONTROL.md (protocol v1).
+/// The ESP32 dongle's private control service ("Bandit"), sans-IO: status, commands,
+/// packages and the update stream. See firmware/bandit/CONTROL.md (protocol v1).
 public enum DongleGATT {
     public static let service = "4E500100-3C1A-4E0B-9D1E-6F2B5A7C8D90"
     public static let status = "4E500101-3C1A-4E0B-9D1E-6F2B5A7C8D90"
@@ -11,7 +11,7 @@ public enum DongleGATT {
     public static let update = "4E500104-3C1A-4E0B-9D1E-6F2B5A7C8D90"
     /// Notifies "?" when the status changed (0.11.1 on; 0.11.0 notified on Status itself).
     public static let changed = "4E500105-3C1A-4E0B-9D1E-6F2B5A7C8D90"
-    public static let advertisedName = "NP Band Remote"
+    public static let advertisedName = "Bandit"
 }
 
 // MARK: status
@@ -353,7 +353,7 @@ public struct DongleLogAssembler: Sendable {
 
 // MARK: package
 
-/// The 256-byte header of a `.npfw` package, followed by the ESP32 app image.
+/// The 256-byte header of a `.banditfw` package, followed by the ESP32 app image.
 public struct DonglePackageHeader: Equatable, Sendable {
     public static let size = 256
     public static let magic: [UInt8] = [0x4E, 0x50, 0x44, 0x46, 0x57, 0x01, 0x00, 0x00] // "NPDFW" 01 00 00

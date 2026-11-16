@@ -154,13 +154,13 @@ import Testing
 
 @Suite struct DongleReleaseTests {
     @Test func decodesAndResolvesRelativeFiles() throws {
-        let json = #"{"version":"0.6.0","id":"3fa2c1d0","file":"band-dongle-3fa2c1d0.npfw","size":1650000,"sha256":"ab","notes":"…","flasher":"band-dongle-3fa2c1d0-flasher.html"}"#
+        let json = #"{"version":"0.6.0","id":"3fa2c1d0","file":"bandit-3fa2c1d0.banditfw","size":1650000,"sha256":"ab","notes":"…","flasher":"bandit-3fa2c1d0-flasher.html"}"#
         let index = try #require(DongleRelease.indexURL(host: "my-mac.example.ts.net"))
         #expect(index.absoluteString == "https://my-mac.example.ts.net/dongle/latest.json")
         let release = try DongleRelease.decode(Data(json.utf8), index: index)
         #expect(release.size == 1_650_000)
-        #expect(release.packageURL?.absoluteString == "https://my-mac.example.ts.net/dongle/band-dongle-3fa2c1d0.npfw")
-        #expect(release.flasherURL?.absoluteString == "https://my-mac.example.ts.net/dongle/band-dongle-3fa2c1d0-flasher.html")
+        #expect(release.packageURL?.absoluteString == "https://my-mac.example.ts.net/dongle/bandit-3fa2c1d0.banditfw")
+        #expect(release.flasherURL?.absoluteString == "https://my-mac.example.ts.net/dongle/bandit-3fa2c1d0-flasher.html")
     }
 
     @Test func noHostNoIndex() {

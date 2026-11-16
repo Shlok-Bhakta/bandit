@@ -67,7 +67,7 @@ extension ProfileTarget {
         switch word {
         case "back": "Down to the profile this one was entered from. Home if there is none; at home, home's buzz again."
         case "home": "Straight to this host's start profile, whatever was entered on the way."
-        case "app": "Up into the profile that lists the computer's app in front (its apps). Computers with np-appwatch."
+        case "app": "Up into the profile that lists the computer's app in front (its apps). Computers with bandit-mac."
         case "next", "previous": "Sideways, on the same level, skipping profiles this host can't use."
         default: nil
         }
@@ -160,10 +160,10 @@ extension ProfileFormat {
         let gestures = ProfileGesture.allCases.map { "- `\($0.rawValue)`: \($0.detail)" }.joined(separator: "\n")
         let actions = actionReference.map { "- `\($0.action)`: \($0.meaning)" }.joined(separator: "\n")
         return """
-        This is an np-profiles file (version 1): gesture profiles for a Meta Neural Band remote dongle. Edit it as I ask and reply with the whole file as one JSON code block.
+        This is a bandit-profiles file (version 1): gesture profiles for a Meta Neural Band remote dongle. Edit it as I ask and reply with the whole file as one JSON code block.
 
         Rules:
-        - Top level: "format": "np-profiles", "version": 1, optional "name" (≤ 40 characters), optional "menu" (one letter a–z or digit 0–9 → an action other than hold:, mouse:point and menu), optional "start" ({"phone"|"computer"|"tv": profile id}; the profile must allow that kind; it's also that host's home), optional "everywhere" (gesture → action, like a profile's "gestures": in every profile, winning over the profile's own for the host kinds it covers; e.g. "flick.down": "profile:back"), "profiles": 1–12 profiles.
+        - Top level: "format": "bandit-profiles", "version": 1, optional "name" (≤ 40 characters), optional "menu" (one letter a–z or digit 0–9 → an action other than hold:, mouse:point and menu), optional "start" ({"phone"|"computer"|"tv": profile id}; the profile must allow that kind; it's also that host's home), optional "everywhere" (gesture → action, like a profile's "gestures": in every profile, winning over the profile's own for the host kinds it covers; e.g. "flick.down": "profile:back"), "profiles": 1–12 profiles.
         - A profile: "id" (1–16 of a–z, 0–9, -; unique; not next, previous, back, home or app), "name" (1–24 characters), optional "buzz" (1–4 or a pattern name), "hosts" (any of phone, computer, mac, windows, linux, tv; default everyone), "typing" (handwriting is typed on computers), "pointer" (pinch-hold and move the wrist moves the mouse on computers, and on an iPhone with AssistiveTouch on (firmware 0.16); the dial and flicks are off there), "gestures" (gesture → action), "apps" (up to 16 Mac bundle ids, like com.google.Chrome: a computer whose helper reports one of them in front switches to this profile; each app in one profile only). Optional app fields: "description", "symbol" (an SF Symbol name), "color" ("#rrggbb").
         - A gesture maps to one action string, or to an object by host kind: {"phone": …, "computer": …, "mac": …, "windows": …, "linux": …, "tv": …, "default": …}. The most specific kind wins (mac beats computer), then default.
         - At most \(maxBytes) bytes minified. Windows and Linux get cmd as Ctrl, so key:cmd+c copies everywhere.

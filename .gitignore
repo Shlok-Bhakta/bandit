@@ -24,7 +24,7 @@ meta-session.json
 # Gala Engine run state
 .gala/
 
-# Dongle release output (served over Tailscale; rebuilt by firmware/band-dongle/release.sh)
+# Dongle release output (served over Tailscale; rebuilt by firmware/bandit/release.sh)
 firmware/dist/
 
 # Local build settings and tokens

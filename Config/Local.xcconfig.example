@@ -2,6 +2,6 @@
 // Find it in Xcode › Settings › Accounts, or at developer.apple.com › Membership.
 DEVELOPMENT_TEAM = ABCDE12345
 // A free (personal) team needs a bundle id unique to you:
-PRODUCT_BUNDLE_IDENTIFIER = com.yourname.neuralplayground
+PRODUCT_BUNDLE_IDENTIFIER = com.yourname.bandit
 // The Mac serving dongle firmware releases (its Tailscale name), for the app's update button:
 // DONGLE_RELEASES_HOST = my-mac.tailnet-name.ts.net

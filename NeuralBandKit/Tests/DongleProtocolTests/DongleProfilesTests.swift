@@ -2,12 +2,12 @@ import Foundation
 import Testing
 @testable import DongleProtocol
 
-/// The shared vectors in firmware/np-profiles/tests: the dongle's checker (Rust) and this one
+/// The shared vectors in firmware/bandit-profiles/tests: the dongle's checker (Rust) and this one
 /// must agree on every file, down to the error path.
 enum ProfileVectors {
     static let root = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        .appendingPathComponent("firmware/np-profiles")
+        .appendingPathComponent("firmware/bandit-profiles")
 
     static func files(_ directory: String) throws -> [(name: String, data: Data)] {
         let folder = root.appendingPathComponent("tests/\(directory)")
@@ -97,7 +97,7 @@ enum ProfileVectors {
         #expect(set.menu["5"] == .type("hello"))
     }
 
-    /// np-profiles' `modes_everywhere_bindings_win_for_the_kinds_they_cover`.
+    /// bandit-profiles' `modes_everywhere_bindings_win_for_the_kinds_they_cover`.
     @Test func modesEverywhereBindingsWinForTheKindsTheyCover() throws {
         let data = try #require(try ProfileVectors.files("valid").first { $0.name == "modes.json" }?.data)
         let set = try ProfileFormat.check(data)
@@ -132,12 +132,12 @@ enum ProfileVectors {
     }
 
     @Test func everywhereErrorsComeBeforeTheProfiles() throws {
-        let text = #"{"format":"np-profiles","version":1,"everywhere":{"index.tap":"mouse:point"},"profiles":[{"id":"home","name":"H"}]}"#
+        let text = #"{"format":"bandit-profiles","version":1,"everywhere":{"index.tap":"mouse:point"},"profiles":[{"id":"home","name":"H"}]}"#
         #expect(ProfileFormat.validate(Data(text.utf8)) == ProfileError("everywhere.index.tap", "mouse:point only works on middle.hold (the pointer moves while it's held)"))
-        let none = #"{"format":"np-profiles","version":1,"everywhere":{"flick.up":"none"},"profiles":[{"id":"a","name":"A","gestures":{"flick.up":"media:mute"}}]}"#
+        let none = #"{"format":"bandit-profiles","version":1,"everywhere":{"flick.up":"none"},"profiles":[{"id":"a","name":"A","gestures":{"flick.up":"media:mute"}}]}"#
         let set = try ProfileFormat.check(Data(none.utf8))
         #expect(set.profiles[0].action(.flickUp, for: .mac) == .media(.mute), "a none everywhere covers nothing")
-        let wrongType = #"{"format":"np-profiles","version":1,"everywhere":["flick.up"],"profiles":[{"id":"a","name":"A"}]}"#
+        let wrongType = #"{"format":"bandit-profiles","version":1,"everywhere":["flick.up"],"profiles":[{"id":"a","name":"A"}]}"#
         #expect(ProfileFormat.validate(Data(wrongType.utf8))?.path == "")
     }
 }
@@ -207,26 +207,26 @@ enum ProfileVectors {
         for bad in ["mouse:point:2", "profile:up", "mouse:click:3", "mouse:button3", "mouse:button9", "mouse:button4:2", "mouse:scrollUp:21", "type:", "type:héllo", "profile:c", "host:fridge", "media:loud", "Menu", "menu:x"] {
             #expect(throws: ProfileError.self, "\(bad)") { try parse(bad) }
         }
-        let error = try #require(ProfileFormat.validate(Data(#"{"format":"np-profiles","version":1,"profiles":[{"id":"a","name":"A","gestures":{"swipe.up":7}}]}"#.utf8)))
+        let error = try #require(ProfileFormat.validate(Data(#"{"format":"bandit-profiles","version":1,"profiles":[{"id":"a","name":"A","gestures":{"swipe.up":7}}]}"#.utf8)))
         #expect(error.path == "profiles[0].gestures.swipe.up")
     }
 
     @Test func modesMessagesMatchTheDongles() throws {
-        let menu = #"{"format":"np-profiles","version":1,"menu":{"p":"mouse:point"},"profiles":[{"id":"a","name":"A"}]}"#
+        let menu = #"{"format":"bandit-profiles","version":1,"menu":{"p":"mouse:point"},"profiles":[{"id":"a","name":"A"}]}"#
         #expect(ProfileFormat.validate(Data(menu.utf8)) == ProfileError("menu.p", "the menu can't hold a key, point or open itself"))
         for id in ProfileFormat.reservedIDs {
-            let text = "{\"format\":\"np-profiles\",\"version\":1,\"profiles\":[{\"id\":\"\(id)\",\"name\":\"X\"}]}"
+            let text = "{\"format\":\"bandit-profiles\",\"version\":1,\"profiles\":[{\"id\":\"\(id)\",\"name\":\"X\"}]}"
             #expect(ProfileFormat.validate(Data(text.utf8)) == ProfileError("profiles[0].id", "\"\(id)\" means something else in profile:… actions: pick another id"))
         }
-        let tap = #"{"format":"np-profiles","version":1,"profiles":[{"id":"a","name":"A","gestures":{"middle.hold":{"phone":"mouse:point","default":"media:voice"},"index.tap":"mouse:point"}}]}"#
+        let tap = #"{"format":"bandit-profiles","version":1,"profiles":[{"id":"a","name":"A","gestures":{"middle.hold":{"phone":"mouse:point","default":"media:voice"},"index.tap":"mouse:point"}}]}"#
         #expect(ProfileFormat.validate(Data(tap.utf8)) == ProfileError("profiles[0].gestures.index.tap", "mouse:point only works on middle.hold (the pointer moves while it's held)"))
     }
 
     @Test func typeErrorsAreTheWholeFile() throws {
-        for text in [#"{"format":"np-profiles","version":1.0,"profiles":[{"id":"a","name":"A"}]}"#,
-                     #"{"format":"np-profiles","version":1,"name":null,"profiles":[{"id":"a","name":"A"}]}"#,
-                     #"{"format":"np-profiles","version":1,"profiles":[{"id":"a"}]}"#,
-                     #"[1]"#, "not json", #"{"format":"np-profiles","version":1,"profiles":[]} x"#] {
+        for text in [#"{"format":"bandit-profiles","version":1.0,"profiles":[{"id":"a","name":"A"}]}"#,
+                     #"{"format":"bandit-profiles","version":1,"name":null,"profiles":[{"id":"a","name":"A"}]}"#,
+                     #"{"format":"bandit-profiles","version":1,"profiles":[{"id":"a"}]}"#,
+                     #"[1]"#, "not json", #"{"format":"bandit-profiles","version":1,"profiles":[]} x"#] {
             let error = try #require(ProfileFormat.validate(Data(text.utf8)), "\(text)")
             #expect(error.path == "", "\(text): \(error)")
         }
@@ -234,15 +234,15 @@ enum ProfileVectors {
 
     @Test func numericBuzzErrorsHaveAFieldPath() {
         for value in ["0", "5", "300", "-1", "1.5", "1.0"] {
-            let data = Data("{\"format\":\"np-profiles\",\"version\":1,\"profiles\":[{\"id\":\"a\",\"name\":\"A\",\"buzz\":\(value)}]}".utf8)
+            let data = Data("{\"format\":\"bandit-profiles\",\"version\":1,\"profiles\":[{\"id\":\"a\",\"name\":\"A\",\"buzz\":\(value)}]}".utf8)
             #expect(ProfileFormat.validate(data) == ProfileError("profiles[0].buzz", "1–4 buzzes"))
         }
     }
 
     @Test func startNeedsEveryComputer() throws {
-        let text = #"{"format":"np-profiles","version":1,"profiles":[{"id":"m","name":"Mac only","hosts":["mac","phone","tv"]}]}"#
+        let text = #"{"format":"bandit-profiles","version":1,"profiles":[{"id":"m","name":"Mac only","hosts":["mac","phone","tv"]}]}"#
         #expect(ProfileFormat.validate(Data(text.utf8))?.path == "start.computer")
-        let extra = #"{"format":"np-profiles","version":1,"start":{"watch":"a"},"profiles":[{"id":"a","name":"A"}]}"#
+        let extra = #"{"format":"bandit-profiles","version":1,"start":{"watch":"a"},"profiles":[{"id":"a","name":"A"}]}"#
         #expect(ProfileFormat.validate(Data(extra.utf8))?.path == "start.watch")
     }
 
@@ -258,7 +258,7 @@ enum ProfileVectors {
 @Suite struct ProfileFileTests {
     @Test func roundTripsAndKeepsUnknownFields() throws {
         let text = """
-        {"format":"np-profiles","version":1,"name":"Mine","x-app":{"theme":[1,2.5,null,true,"é\\n"]},
+        {"format":"bandit-profiles","version":1,"name":"Mine","x-app":{"theme":[1,2.5,null,true,"é\\n"]},
          "profiles":[{"id":"a","name":"A","symbol":"music.note","color":"#33ddaa","description":"d","future":{"k":1},
            "gestures":{"index.doubleTap":"media:playPause","middle.hold":{"mac":"hold:cmd+space","default":"media:voice"}}}]}
         """
@@ -287,7 +287,7 @@ enum ProfileVectors {
     @Test func stableOrderAndHash() throws {
         let set = GestureProfileSet.builtin
         let minified = String(decoding: set.minifiedData, as: UTF8.self)
-        #expect(minified.hasPrefix(#"{"format":"np-profiles","version":1,"name":"Built-in","menu":{"c":"profile:copilot""#))
+        #expect(minified.hasPrefix(#"{"format":"bandit-profiles","version":1,"name":"Built-in","menu":{"c":"profile:copilot""#))
         #expect(set.sha8.count == 8 && set.sha8.allSatisfy(\.isHexDigit) && set.sha8 == set.sha8.lowercased())
         #expect(ProfileFormat.sha8(Data("abc".utf8)) == "ba7816bf")
         var edited = set
@@ -417,7 +417,7 @@ enum ProfileVectors {
         }
     }
     @Test func redefinedPatternsResolveEverywhereAndRoundTrip() throws {
-        let data = Data(#"{"format":"np-profiles","version":1,"custom":{"keep":true},"buzzes":{"tap":"80*22","zap":"50 _100 80*90"},"feedback":{"connected":"none","gesture":"zap"},"profiles":[{"id":"a","name":"A","buzz":"zap","gestures":{"flick.up":{"default":"buzz:zap","buzz":"tap"},"band.thumb.click":"apps:previous"}}]}"#.utf8)
+        let data = Data(#"{"format":"bandit-profiles","version":1,"custom":{"keep":true},"buzzes":{"tap":"80*22","zap":"50 _100 80*90"},"feedback":{"connected":"none","gesture":"zap"},"profiles":[{"id":"a","name":"A","buzz":"zap","gestures":{"flick.up":{"default":"buzz:zap","buzz":"tap"},"band.thumb.click":"apps:previous"}}]}"#.utf8)
         let editable = try GestureProfileSet.decode(data)
         let parsed = try editable.parsed()
         #expect(parsed.feedback["connected"] == nil)
@@ -441,5 +441,12 @@ enum ProfileVectors {
         #expect(GestureLabRecord.bandNames(finger: "thumb", action: "click", derived: "click") == ["band.thumb.click", "band.click"])
         #expect(GestureLabRecord.bandNames(finger: "unknown", action: "click", derived: "notApplicable") == ["band.click"])
         #expect(GestureLabRecord.parse("not a gesture") == nil)
+    }
+
+    @Test func setsSavedBeforeTheRenameStillReadAndKeepTheirHash() throws {
+        let text = #"{"format":"np-profiles","version":1,"profiles":[{"id":"a","name":"A"}]}"#
+        let set = try GestureProfileSet.decode(Data(text.utf8))
+        #expect(set.validate() == nil)
+        #expect(set.format == ProfileFormat.legacyFormat, "kept as it was, so the dongle's hash still matches")
     }
 }

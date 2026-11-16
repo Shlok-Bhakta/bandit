@@ -1,0 +1,16 @@
+{
+  "format": "bandit-profiles",
+  "version": 1,
+  "profiles": [
+    {
+      "id": "a",
+      "name": "A",
+      "hosts": [
+        "phone"
+      ],
+      "apps": [
+        "com.apple.Safari"
+      ]
+    }
+  ]
+}

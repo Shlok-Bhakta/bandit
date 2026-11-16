@@ -9,7 +9,7 @@ import OSLog
 ///
 /// Entries go to three places: an in-memory ring buffer (the in-app Logs screen), a per-launch
 /// file under Application Support/Logs (survives crashes; the last 5 launches are kept), and
-/// `os.Logger` (Console.app, subsystem `dev.neuralplayground.band`).
+/// `os.Logger` (Console.app, subsystem `io.github.shlok-bhakta.bandit`).
 public final class BandLog: @unchecked Sendable {
     public enum Level: Int, Sendable, Comparable, CaseIterable, Codable {
         case debug, info, notice, warning, error
@@ -61,7 +61,7 @@ public final class BandLog: @unchecked Sendable {
     private let start = ProcessInfo.processInfo.systemUptime
     private var loggers: [Category: Logger] = [:]
     private var file: FileHandle?
-    private let fileQueue = DispatchQueue(label: "dev.neuralplayground.log.file")
+    private let fileQueue = DispatchQueue(label: "io.github.shlok-bhakta.bandit.log.file")
     private var verboseFrames = false
     private var echo = false
     private var revisionCounter = 0
@@ -85,7 +85,7 @@ public final class BandLog: @unchecked Sendable {
         }
         self.launchFile = launchFile
         for category in Category.allCases {
-            loggers[category] = Logger(subsystem: "dev.neuralplayground.band", category: category.rawValue)
+            loggers[category] = Logger(subsystem: "io.github.shlok-bhakta.bandit", category: category.rawValue)
         }
     }
 

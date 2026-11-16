@@ -1,0 +1,14 @@
+{
+  "format": "bandit-profiles",
+  "version": 1,
+  "profiles": [
+    {
+      "id": "a",
+      "name": "A",
+      "apps": [
+        "com.apple.Safari",
+        "Google Chrome"
+      ]
+    }
+  ]
+}

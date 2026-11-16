@@ -2,7 +2,7 @@
 name = "dongle-pack"
 version = "0.1.0"
 edition = "2021"
-description = "Signs band-dongle firmware into .npfw update packages and writes the release index"
+description = "Signs bandit firmware into .banditfw update packages and writes the release index"
 license = "MIT"
 
 [dependencies]

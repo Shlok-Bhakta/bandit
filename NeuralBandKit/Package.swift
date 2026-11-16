@@ -16,7 +16,7 @@ let package = Package(
     targets: [
         .target(name: "BandLogging"),
         .target(name: "BandTransport", dependencies: ["BandLogging"]),
-        // The ESP32 dongle's control service (firmware/band-dongle/CONTROL.md). No band code involved.
+        // The ESP32 dongle's control service (firmware/bandit/CONTROL.md). No band code involved.
         .target(name: "DongleProtocol"),
         .testTarget(name: "DongleProtocolTests", dependencies: ["DongleProtocol"]),
     ]

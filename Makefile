@@ -1,21 +1,21 @@
-# Neural Playground: `make help` lists everything. Dongle targets run in firmware/band-dongle
+# Bandit: `make help` lists everything. Dongle targets run in firmware/bandit
 # (its own `make help` has more: log, status, cmd, ota-test, ...).
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
-DONGLE := $(MAKE) -C firmware/band-dongle
+DONGLE := $(MAKE) -C firmware/bandit
 # Host-side Rust (band-core tests, dongle-pack): the dongle's config.mk may point elsewhere.
--include firmware/band-dongle/config.mk
+-include firmware/bandit/config.mk
 HOST_TARGET ?= $(abspath firmware/dongle-pack/target)
 CARGO_HOST := $(if $(CARGO_HOME),RUSTUP_HOME=$(RUSTUP_HOME) CARGO_HOME=$(CARGO_HOME) $(CARGO_HOME)/bin/cargo,cargo) +stable
 
-.PHONY: help test test-swift test-rust dongle-app dongle-app-deliver project dongle-setup dongle-build dongle-flash \
+.PHONY: help test test-swift test-rust app app-deliver project dongle-setup dongle-build dongle-flash \
         dongle-release dongle-serve dongle-log dongle-status dongle-cmd check clean
 
 help:
 	@echo "make test                  all host tests (Swift NeuralBandKit, Rust band-core and dongle-pack)"
-	@echo "make dongle-app            build the NP Dongle app (the dongle's own app, with its Live Activities) for a device"
-	@echo "make dongle-app-deliver    build it and push build/ipa/NPDongle.ipa to Gala as np-dongle"
-	@echo "make project               regenerate NeuralPlayground.xcodeproj from project.yml (XcodeGen)"
+	@echo "make app                   build the Bandit iOS app (with its Live Activities) for a device"
+	@echo "make app-deliver           build it and push build/ipa/Bandit.ipa to Gala as bandit"
+	@echo "make project               regenerate Bandit.xcodeproj from project.yml (XcodeGen)"
 	@echo "make dongle-setup          once: the Rust ESP32 toolchain (espup, espflash, ldproxy)"
 	@echo "make dongle-build          build the dongle firmware"
 	@echo "make dongle-flash          build and flash it over USB [PORT=/dev/cu.usbmodem…]"
@@ -32,17 +32,17 @@ test-swift:
 
 test-rust:
 	cd firmware/band-core && CARGO_TARGET_DIR=$(HOST_TARGET) $(CARGO_HOST) test -q
-	cd firmware/np-profiles && CARGO_TARGET_DIR=$(HOST_TARGET) $(CARGO_HOST) test -q
+	cd firmware/bandit-profiles && CARGO_TARGET_DIR=$(HOST_TARGET) $(CARGO_HOST) test -q
 	cd firmware/dongle-pack && CARGO_TARGET_DIR=$(HOST_TARGET) $(CARGO_HOST) build -q
 
 project:
 	xcodegen generate
 
-dongle-app: project
-	APP=NPDongle GALA_BUILD_DIR=$(CURDIR)/build GALA_ARTIFACT_DIR=$(CURDIR)/build/ipa ./ios-build.sh
+app: project
+	GALA_BUILD_DIR=$(CURDIR)/build GALA_ARTIFACT_DIR=$(CURDIR)/build/ipa ./ios-build.sh
 
-dongle-app-deliver: dongle-app
-	gala push build/ipa/NPDongle.ipa --name np-dongle
+app-deliver: app
+	gala push build/ipa/Bandit.ipa --name bandit
 
 dongle-setup:
 	$(DONGLE) setup

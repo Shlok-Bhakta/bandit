@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Before pushing: scan the files git would publish (tracked + untracked, not ignored) for keys,
 # credentials and personal identifiers. Exits 1 on a hit. Add your own patterns (your Tailscale
-# host, your band's address) in ~/.config/neural-playground/private-patterns, one regex per line.
+# host, your band's address) in ~/.config/bandit/private-patterns, one regex per line.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 patterns=(
@@ -14,7 +14,7 @@ patterns=(
   '^[[:space:]]*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*[A-Z0-9]{10}[[:space:]]*$'
   '[a-z0-9-]+\.tail[a-z0-9]+\.ts\.net'
 )
-private="$HOME/.config/neural-playground/private-patterns"
+private="$HOME/.config/bandit/private-patterns"
 if [ -f "$private" ]; then while IFS= read -r line; do [ -n "$line" ] && patterns+=("$line"); done < "$private"; fi
 files=$( { git ls-files; git ls-files --others --exclude-standard; } | sort -u | grep -v -E '^firmware/dongle-pack/vendor/|\.example$')
 status=0
@@ -23,7 +23,7 @@ for pattern in "${patterns[@]}"; do
     echo "possible secret or personal data ($pattern):"; echo "$hits" | cut -c1-160; status=1
   fi
 done
-for file in $(printf '%s\n' "$files" | grep -E '(band\.json|\.npbackup|owner(\.pending)?\.key|meta-session\.json|\.npfw|signing\.key)$' || true); do
+for file in $(printf '%s\n' "$files" | grep -E '(band\.json|\.npbackup|\.npfw|owner(\.pending)?\.key|meta-session\.json|\.banditfw|signing\.key)$' || true); do
   echo "credential-like file would be published: $file"; status=1
 done
 [ $status -eq 0 ] && echo "check-secrets: clean ($(printf '%s\n' "$files" | wc -l | tr -d ' ') files)"

@@ -293,7 +293,7 @@ extension JSONValue {
     }
 
     /// Two-space indentation for people (and AI assistants). Short objects and arrays of plain
-    /// values stay on one line, like the hand-written files in firmware/np-profiles.
+    /// values stay on one line, like the hand-written files in firmware/bandit-profiles.
     public var pretty: String {
         var out = ""
         write(to: &out, indent: "  ", level: 0)

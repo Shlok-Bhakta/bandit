@@ -1,12 +1,14 @@
 import CryptoKit
 import Foundation
 
-/// Gesture profiles (`np-profiles` JSON, version 1): what each band gesture does on the dongle,
-/// per profile and per kind of host. See firmware/np-profiles/PROFILES.md. The checks here are the
-/// dongle's own (firmware/np-profiles/src/lib.rs, `RawFile::check`), down to the error paths, so a
+/// Gesture profiles (`bandit-profiles` JSON, version 1): what each band gesture does on the dongle,
+/// per profile and per kind of host. See firmware/bandit-profiles/PROFILES.md. The checks here are the
+/// dongle's own (firmware/bandit-profiles/src/lib.rs, `RawFile::check`), down to the error paths, so a
 /// file the app accepts is one the dongle saves; the shared test vectors keep the two in step.
 public enum ProfileFormat {
-    public static let format = "np-profiles"
+    public static let format = "bandit-profiles"
+    /// The name before Bandit: still read (and kept as it was, so a set's hash doesn't change).
+    public static let legacyFormat = "np-profiles"
     public static let version: Int64 = 1
     /// The largest file the dongle keeps, minified.
     public static let maxBytes = 6144
@@ -18,8 +20,8 @@ public enum ProfileFormat {
     public static let maxApps = 16
     /// `write` with no time: handwriting stops after this many seconds with nothing written.
     public static let writeSeconds = 10
-    public static let fileExtension = "npprofiles"
-    public static let typeIdentifier = "dev.neuralplayground.profiles"
+    public static let fileExtension = "bandit"
+    public static let typeIdentifier = "io.github.shlok-bhakta.bandit.profiles"
     /// Status `ph` while the dongle runs its built-in set.
     public static let builtinHash = "builtin"
 
@@ -49,11 +51,11 @@ public enum ProfileFormat {
         do {
             return try JSONValue.parse(data)
         } catch let error as JSONParseError {
-            throw ProfileError("", "not np-profiles JSON: \(error)")
+            throw ProfileError("", "not bandit-profiles JSON: \(error)")
         }
     }
 
-    /// How deep arrays and objects nest, outside strings (as np-profiles counts it).
+    /// How deep arrays and objects nest, outside strings (as bandit-profiles counts it).
     static func nesting(_ data: Data) -> Int {
         var (depth, deepest, inString, escaped) = (0, 0, false, false)
         for byte in data {
@@ -329,7 +331,7 @@ private struct RawFile {
     /// Bindings that work the same in every profile (they win over a profile's own).
     var everywhere: JSONObject
 
-    static func invalid(_ message: String) -> ProfileError { ProfileError("", "not np-profiles JSON: \(message)") }
+    static func invalid(_ message: String) -> ProfileError { ProfileError("", "not bandit-profiles JSON: \(message)") }
 
     /// The struct's own fields, once each.
     static func fields(_ value: JSONValue, _ known: [String], what: String) throws -> [String: JSONValue] {
@@ -368,7 +370,7 @@ private struct RawFile {
     }
 
     init(_ value: JSONValue) throws {
-        let fields = try Self.fields(value, ["format", "version", "name", "menu", "start", "profiles", "buzzes", "feedback", "everywhere"], what: "an np-profiles object")
+        let fields = try Self.fields(value, ["format", "version", "name", "menu", "start", "profiles", "buzzes", "feedback", "everywhere"], what: "a bandit-profiles object")
         format = try Self.string(fields["format"], "format")
         guard let versionValue = fields["version"] else { throw Self.invalid("missing field `version`") }
         guard let version = versionValue.integer, version >= 0 else {
@@ -413,7 +415,7 @@ private struct RawFile {
     /// `RawFile::check`, rule for rule and in the same order.
     func check() throws -> ParsedProfileSet {
         let F = ProfileFormat.self
-        if format != F.format { throw ProfileError("format", "must be \"\(F.format)\"") }
+        if format != F.format && format != F.legacyFormat { throw ProfileError("format", "must be \"\(F.format)\"") }
         if version != F.version { throw ProfileError("version", "\(version) isn't supported (this dongle reads version \(F.version))") }
         if name.unicodeScalars.count > 40 { throw ProfileError("name", "at most 40 characters") }
         if profiles.isEmpty || profiles.count > F.maxProfiles { throw ProfileError("profiles", "1 to \(F.maxProfiles) profiles") }
@@ -808,7 +810,7 @@ public struct GestureProfileSet: Equatable, Sendable {
 
     /// Reads any file shaped like a profile set, valid or not (`validate()` says which).
     public init(json: JSONValue) throws {
-        guard let object = json.object else { throw ProfileError("", "not np-profiles JSON: the file is \(json.typeName), not an object") }
+        guard let object = json.object else { throw ProfileError("", "not bandit-profiles JSON: the file is \(json.typeName), not an object") }
         format = ""
         version = 0
         menu = [:]

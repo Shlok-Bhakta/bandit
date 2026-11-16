@@ -18,8 +18,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: band-core tests
         run: cd firmware/band-core && cargo test -q
-      - name: np-profiles tests
-        run: cd firmware/np-profiles && cargo test -q
+      - name: bandit-profiles tests
+        run: cd firmware/bandit-profiles && cargo test -q
       - name: dongle-pack builds
         run: cd firmware/dongle-pack && cargo build -q
 

@@ -1,11 +1,11 @@
 import Foundation
 
 extension GestureProfileSet {
-    /// The dongle's built-in profiles (firmware/np-profiles/profiles/default.json, which the tests
+    /// The dongle's built-in profiles (firmware/bandit-profiles/profiles/default.json, which the tests
     /// compare this with): what it does with no file of yours, and what `profiles reset` restores.
     public static let builtinJSON = #"""
 {
-  "format": "np-profiles",
+  "format": "bandit-profiles",
   "version": 1,
   "name": "Built-in",
   "menu": {

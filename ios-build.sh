@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Gala Engine recipe: build an unsigned Release device IPA of NP Dongle (the band remote dongle's
+# Gala Engine recipe: build an unsigned Release device IPA of Bandit (the band remote dongle's
 # app, with its Live Activity extension).
 set -euo pipefail
 
 : "${GALA_BUILD_DIR:?Gala build directory is required}"
 : "${GALA_ARTIFACT_DIR:?Gala artifact directory is required}"
 cd "$(dirname "$0")"
-APP=NPDongle
+APP=Bandit
 
 # Keep the generated project in sync with project.yml when XcodeGen is available.
 if command -v xcodegen >/dev/null 2>&1; then
@@ -14,9 +14,9 @@ if command -v xcodegen >/dev/null 2>&1; then
 fi
 
 # Build settings that stay out of git (see .env.example): ./.env, then
-# ~/.config/neural-playground/build.env (which also reaches Gala's synced copy, where .env isn't).
+# ~/.config/bandit/build.env (which also reaches Gala's synced copy, where .env isn't).
 SETTINGS=()
-for env in .env "$HOME/.config/neural-playground/build.env"; do
+for env in .env "$HOME/.config/bandit/build.env"; do
   # shellcheck disable=SC1090
   if [ -f "$env" ]; then . "$env"; fi
 done
@@ -26,17 +26,17 @@ done
 
 DERIVED_DATA="$GALA_BUILD_DIR/DerivedData"
 xcodebuild -quiet \
-  -project NeuralPlayground.xcodeproj -scheme "$APP" \
+  -project Bandit.xcodeproj -scheme "$APP" \
   -configuration Release -destination 'generic/platform=iOS' \
   -derivedDataPath "$DERIVED_DATA" -packageCachePath "$GALA_BUILD_DIR/SwiftPM" \
   CODE_SIGNING_ALLOWED=NO ${SETTINGS[@]+"${SETTINGS[@]}"} build
 
 BUNDLE="$DERIVED_DATA/Build/Products/Release-iphoneos/$APP.app"
 test -d "$BUNDLE"
-if [ ! -d "$BUNDLE/PlugIns/NPDongleWidgets.appex" ]; then
-  echo "NPDongle.app has no PlugIns/NPDongleWidgets.appex (the Live Activities)" >&2; exit 1
+if [ ! -d "$BUNDLE/PlugIns/BanditWidgets.appex" ]; then
+  echo "Bandit.app has no PlugIns/BanditWidgets.appex (the Live Activities)" >&2; exit 1
 fi
-STAGE="$(mktemp -d "${TMPDIR:-/tmp}/neuralplayground-gala.XXXXXX")"
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/bandit-gala.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/Payload" "$GALA_ARTIFACT_DIR"
 ditto "$BUNDLE" "$STAGE/Payload/$APP.app"

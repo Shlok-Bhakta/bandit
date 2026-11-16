@@ -1,10 +1,10 @@
-//! dongle-pack: signs band-dongle firmware for over-the-air updates (see ../band-dongle/CONTROL.md).
+//! dongle-pack: signs bandit firmware for over-the-air updates (see ../bandit/CONTROL.md).
 //!
 //! `dongle-pack keygen`
 //!     Creates the ECDSA P-256 signing key (outside the repo, owner-only) and prints its public half
-//!     for band-dongle's src/ota.rs.
+//!     for bandit's src/ota.rs.
 //! `dongle-pack pack <app.bin> <out-dir> [--notes TEXT] [--version V] [--bootloader B --partitions P --esptool JS]`
-//!     Writes `band-dongle-<id>.npfw` and `latest.json`; with the three flasher inputs, also a
+//!     Writes `bandit-<id>.banditfw` and `latest.json`; with the three flasher inputs, also a
 //!     self-contained Chrome (Web Serial) flasher page (esptool-js 0.7 `bundle.js`) that writes the bootloader, the partition
 //!     table, a blank otadata (boot ota_0) and the app, leaving NVS (owner key, pairings) alone.
 
@@ -21,7 +21,7 @@ const HEADER_LEN: usize = 256;
 
 fn key_path() -> anyhow::Result<PathBuf> {
     let home = std::env::var("HOME").context("HOME isn't set")?;
-    Ok(PathBuf::from(home).join(".config/neural-playground/dongle-signing.key"))
+    Ok(PathBuf::from(home).join(".config/bandit/dongle-signing.key"))
 }
 
 fn load_key() -> anyhow::Result<SigningKey> {
@@ -84,13 +84,13 @@ fn pack(args: &[String]) -> anyhow::Result<()> {
 
     let out = Path::new(out);
     std::fs::create_dir_all(out)?;
-    let file = format!("band-dongle-{id}.npfw");
+    let file = format!("bandit-{id}.banditfw");
     let package = [&header[..], &image].concat();
     std::fs::write(out.join(&file), &package)?;
 
     let flasher = match (option("--bootloader"), option("--partitions"), option("--esptool")) {
         (Some(bootloader), Some(partitions), Some(esptool)) => {
-            let name = format!("band-dongle-{id}-flasher.html");
+            let name = format!("bandit-{id}-flasher.html");
             let page = flasher_page(&std::fs::read(bootloader)?, &std::fs::read(partitions)?, &image, &std::fs::read_to_string(esptool)?, &label_text(label));
             std::fs::write(out.join(&name), page)?;
             Some(name)
@@ -120,14 +120,14 @@ fn flasher_page(bootloader: &[u8], partitions: &[u8], app: &[u8], esptool: &str,
     let esptool = b64(esptool.as_bytes());
     format!(r#"<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>NP Band Remote flasher</title>
+<title>Bandit flasher</title>
 <style>
 body{{font:16px -apple-system,system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 20px;color:#111}}
 button{{font-size:17px;padding:10px 18px;border-radius:10px;border:0;background:#2563eb;color:#fff;cursor:pointer}}
 button:disabled{{background:#9ca3af}} progress{{width:100%;height:14px}}
 pre{{background:#f3f4f6;padding:12px;border-radius:8px;height:220px;overflow:auto;font-size:12px;white-space:pre-wrap}}
 </style></head><body>
-<h1>NP Band Remote flasher</h1>
+<h1>Bandit flasher</h1>
 <p>Firmware <b>{label}</b>. Use desktop Chrome or Edge. Plug the dongle in over USB, press <b>Flash</b>, then pick the
 dongle's port (usually "USB JTAG/serial debug unit"). This writes the firmware and keeps the dongle's owner key and
 Bluetooth pairings. If the port doesn't appear: unplug, hold the BOOT button (G0 on a Cardputer) while plugging back in, release, and try again.</p>

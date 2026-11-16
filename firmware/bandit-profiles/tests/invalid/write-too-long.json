@@ -1,0 +1,13 @@
+{
+  "format": "bandit-profiles",
+  "version": 1,
+  "profiles": [
+    {
+      "id": "a",
+      "name": "A",
+      "gestures": {
+        "index.tripleTap": "write:90"
+      }
+    }
+  ]
+}
