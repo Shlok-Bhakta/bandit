@@ -286,7 +286,7 @@ type Battery<'d> = Box<dyn FnMut() -> Option<f32> + 'd>;
 struct Display<'d> {
     spi: SpiDeviceDriver<'d, SpiDriver<'d>>,
     dc: PinDriver<'d, Output>,
-    _backlight: PinDriver<'d, Output>,
+    backlight: PinDriver<'d, Output>,
     strip: Vec<u8>,
 }
 
@@ -302,7 +302,7 @@ impl<'d> Display<'d> {
         let mut display = Display {
             spi,
             dc: PinDriver::output(dc)?,
-            _backlight: PinDriver::output(backlight)?,
+            backlight: PinDriver::output(backlight)?,
             strip: vec![0; WIDTH * STRIP * 2],
         };
         let mut reset = PinDriver::output(reset)?;
@@ -345,8 +345,12 @@ impl<'d> Display<'d> {
         self.command(0x36, &[0x20 | 0x40 | 0x04 | 0x08])?;
         self.command(0x21, &[])?; // inverted (this panel's colours are)
         self.command(0x29, &[])?; // on
-        self._backlight.set_high()?;
+        self.backlight.set_high()?;
         Ok(())
+    }
+
+    fn light(&mut self, on: bool) {
+        let _ = if on { self.backlight.set_high() } else { self.backlight.set_low() };
     }
 
     /// Starts writing rows `from` to `to` (exclusive): the bands follow, top first (`send`).
@@ -538,15 +542,21 @@ struct Ui<'d> {
     toast: Option<(String, Instant)>,
     millivolts: Option<f32>,
     last: Option<View>,
+    /// The last key or G0 press: the screen goes dark `SCREEN_ON` after it.
+    touched: Instant,
+    dark: bool,
 }
 
 const TOAST: Duration = Duration::from_millis(1600);
 const GESTURE_SHOWN: Duration = Duration::from_secs(6);
+/// How long the screen stays lit after the last key (or G0) press.
+const SCREEN_ON: Duration = Duration::from_secs(10);
 
 impl<'d> Ui<'d> {
     fn new(remote: Remote, display: Display<'d>, keyboard: Keyboard<'d>, int: Option<PinDriver<'d, Input>>,
            battery: Option<Battery<'d>>, led: Option<Led<'d>>) -> Self {
-        Ui { remote, display, frame: Frame::new(), keyboard, int, battery, led, screen: Screen::Home, toast: None, millivolts: None, last: None }
+        Ui { remote, display, frame: Frame::new(), keyboard, int, battery, led, screen: Screen::Home, toast: None, millivolts: None, last: None,
+             touched: Instant::now(), dark: false }
     }
 
     fn run(&mut self) {
@@ -555,7 +565,23 @@ impl<'d> Ui<'d> {
         loop {
             // INT is low while key events wait; without it, ask every round.
             if self.int.as_ref().is_none_or(|int| int.is_low()) {
-                for press in self.keyboard.presses() { self.key(press); }
+                for press in self.keyboard.presses() {
+                    // A key in the dark only wakes the screen (no profile changes by accident),
+                    // except in keyboard mode, where it's typed too.
+                    let woke = self.wake();
+                    if !woke || self.screen == Screen::Typing { self.key(press); }
+                }
+            }
+            // G0 (main.rs acts on it): it wakes the screen too.
+            if unsafe { esp_idf_svc::sys::gpio_get_level(0) } == 0 { self.wake(); }
+            if !self.dark && self.touched.elapsed() >= SCREEN_ON {
+                self.dark = true;
+                self.display.light(false);
+            }
+            if self.dark {
+                self.light();
+                FreeRtos::delay_ms(20);
+                continue;
             }
             if Instant::now() >= next_battery {
                 next_battery = Instant::now() + Duration::from_secs(10);
@@ -574,6 +600,19 @@ impl<'d> Ui<'d> {
             self.light();
             FreeRtos::delay_ms(20);
         }
+    }
+
+    /// Counts as a touch; true when the screen was dark (it's lit again, redrawn first).
+    fn wake(&mut self) -> bool {
+        self.touched = Instant::now();
+        if !self.dark { return false; }
+        self.dark = false;
+        self.last = None;
+        let view = self.view(Duration::ZERO);
+        if let Err(error) = self.show(&view, 0..HEIGHT / BAND) { warn!("CARDPUTER: screen: {error}"); }
+        self.last = Some(view);
+        self.display.light(true);
+        true
     }
 
     fn read_battery(&mut self) {

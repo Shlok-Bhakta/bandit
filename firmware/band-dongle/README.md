@@ -21,6 +21,8 @@ profile big on a card in its colour (the app's `color`, or the built-in profiles
 device it's on, and each gesture as it happens (`Index tap  >  Play/Pause`). An open pairing window
 shows at the bottom with its seconds left, and an update its progress on the card. The LED glows faintly in the
 profile's colour and flashes with each gesture. The Cardputer's own battery is at the top right.
+The screen goes dark 10 s after the last key or G0 press (0.18.1); the next key only wakes it (in
+keyboard mode it's typed too).
 
 | Key | Does |
 |---|---|
