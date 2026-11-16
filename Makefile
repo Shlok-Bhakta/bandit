@@ -8,13 +8,11 @@ DONGLE := $(MAKE) -C firmware/band-dongle
 HOST_TARGET ?= $(abspath firmware/dongle-pack/target)
 CARGO_HOST := $(if $(CARGO_HOME),RUSTUP_HOME=$(RUSTUP_HOME) CARGO_HOME=$(CARGO_HOME) $(CARGO_HOME)/bin/cargo,cargo) +stable
 
-.PHONY: help test test-swift test-rust app app-deliver dongle-app dongle-app-deliver project dongle-setup dongle-build dongle-flash \
+.PHONY: help test test-swift test-rust dongle-app dongle-app-deliver project dongle-setup dongle-build dongle-flash \
         dongle-release dongle-serve dongle-log dongle-status dongle-cmd check clean
 
 help:
 	@echo "make test                  all host tests (Swift NeuralBandKit, Rust band-core and dongle-pack)"
-	@echo "make app                   build the iOS app for a device (unsigned; open the Xcode project to run it)"
-	@echo "make app-deliver           build, test and install it with Gala (gala deliver --host local)"
 	@echo "make dongle-app            build the NP Dongle app (the dongle's own app, with its Live Activities) for a device"
 	@echo "make dongle-app-deliver    build it and push build/ipa/NPDongle.ipa to Gala as np-dongle"
 	@echo "make project               regenerate NeuralPlayground.xcodeproj from project.yml (XcodeGen)"
@@ -39,12 +37,6 @@ test-rust:
 
 project:
 	xcodegen generate
-
-app: project
-	GALA_BUILD_DIR=$(CURDIR)/build GALA_ARTIFACT_DIR=$(CURDIR)/build/ipa ./ios-build.sh
-
-app-deliver:
-	gala deliver --host local
 
 dongle-app: project
 	APP=NPDongle GALA_BUILD_DIR=$(CURDIR)/build GALA_ARTIFACT_DIR=$(CURDIR)/build/ipa ./ios-build.sh

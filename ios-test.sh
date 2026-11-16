@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Gala Engine gate: the NeuralBandKit protocol tests (crypto vectors, full sessions against a
-# simulated scheme-26 band, ownership ceremony, credential formats). They run on macOS, so no
-# simulator is needed.
+# Gala Engine gate: the NeuralBandKit tests (the dongle's control protocol, profiles, merge). They
+# run on macOS, so no simulator is needed.
 set -euo pipefail
 
 : "${GALA_BUILD_DIR:?Gala build directory is required}"

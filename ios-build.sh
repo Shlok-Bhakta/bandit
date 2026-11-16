@@ -1,16 +1,12 @@
 #!/usr/bin/env bash
-# Gala Engine recipe: build an unsigned Release device IPA of Neural Playground, or of NP Dongle
-# (the band remote dongle's app, with its Live Activity extension) with APP=NPDongle.
+# Gala Engine recipe: build an unsigned Release device IPA of NP Dongle (the band remote dongle's
+# app, with its Live Activity extension).
 set -euo pipefail
 
 : "${GALA_BUILD_DIR:?Gala build directory is required}"
 : "${GALA_ARTIFACT_DIR:?Gala artifact directory is required}"
 cd "$(dirname "$0")"
-APP="${APP:-NeuralPlayground}"
-case "$APP" in
-  NeuralPlayground | NPDongle) ;;
-  *) echo "APP must be NeuralPlayground or NPDongle (got $APP)" >&2; exit 2 ;;
-esac
+APP=NPDongle
 
 # Keep the generated project in sync with project.yml when XcodeGen is available.
 if command -v xcodegen >/dev/null 2>&1; then
@@ -24,7 +20,7 @@ for env in .env "$HOME/.config/neural-playground/build.env"; do
   # shellcheck disable=SC1090
   if [ -f "$env" ]; then . "$env"; fi
 done
-for name in DONGLE_RELEASES_HOST META_FRL_CLIENT META_AR_CLIENT META_HW_CLIENT; do
+for name in DONGLE_RELEASES_HOST; do
   if [ -n "${!name:-}" ]; then SETTINGS+=("$name=${!name}"); fi
 done
 
@@ -37,7 +33,7 @@ xcodebuild -quiet \
 
 BUNDLE="$DERIVED_DATA/Build/Products/Release-iphoneos/$APP.app"
 test -d "$BUNDLE"
-if [ "$APP" = NPDongle ] && [ ! -d "$BUNDLE/PlugIns/NPDongleWidgets.appex" ]; then
+if [ ! -d "$BUNDLE/PlugIns/NPDongleWidgets.appex" ]; then
   echo "NPDongle.app has no PlugIns/NPDongleWidgets.appex (the Live Activities)" >&2; exit 1
 fi
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/neuralplayground-gala.XXXXXX")"
