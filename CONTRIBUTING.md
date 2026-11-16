@@ -11,7 +11,7 @@ If you do build it, the notes below are how it's put together.
 | Part | Needs |
 |---|---|
 | iOS app, NeuralBandKit | Xcode (iOS 17 SDK or later), [XcodeGen](https://github.com/yonaskolb/XcodeGen) |
-| Dongle firmware | A Seeed XIAO ESP32-S3; `make dongle-setup` installs the Rust ESP toolchain (espup, espflash, ldproxy). The first build downloads ESP-IDF v5.3 (slow, once) |
+| Dongle firmware | An M5Stack Cardputer ADV (any ESP32-S3 with 8 MB of flash runs it headless); `make dongle-setup` installs the Rust ESP toolchain (espup, espflash, ldproxy). The first build downloads ESP-IDF v5.3 (slow, once) |
 | Host tools and tests | Rust stable (`dongle-pack`, `band-core` tests) |
 
 - Local settings stay out of git: copy `.env.example` to `.env` (release host, Meta client tokens

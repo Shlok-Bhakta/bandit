@@ -68,6 +68,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "az"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b7e4c2464d97fe331d41de9d5db0def0a96f4d823b8b32a2efd503578988973"
+
+[[package]]
 name = "band-core"
 version = "0.5.0"
 dependencies = [
@@ -83,12 +89,13 @@ dependencies = [
 
 [[package]]
 name = "band-dongle"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "band-core",
  "base64",
  "embassy-time",
+ "embedded-graphics-core",
  "embuild",
  "esp-idf-svc",
  "esp32-nimble",
@@ -97,6 +104,7 @@ dependencies = [
  "p256",
  "rand_core",
  "sha2",
+ "u8g2-fonts",
 ]
 
 [[package]]
@@ -632,6 +640,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9d2e857f87ac832df68fa498d18ddc679175cf3d2e4aa893988e5601baf9438"
 dependencies = [
  "nb 1.1.0",
+]
+
+[[package]]
+name = "embedded-graphics-core"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95743bef3ff70fcba3930246c4e6872882bbea0dcc6da2ca860112e0cd4bd09f"
+dependencies = [
+ "az",
+ "byteorder",
 ]
 
 [[package]]
@@ -1876,6 +1894,15 @@ name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
+
+[[package]]
+name = "u8g2-fonts"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ce3199e4c7d98a0a47ddd5ae9cde5a4e944d316319e3208527de504f4e76032"
+dependencies = [
+ "embedded-graphics-core",
+]
 
 [[package]]
 name = "uncased"

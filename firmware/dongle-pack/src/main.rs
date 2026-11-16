@@ -130,7 +130,7 @@ pre{{background:#f3f4f6;padding:12px;border-radius:8px;height:220px;overflow:aut
 <h1>NP Band Remote flasher</h1>
 <p>Firmware <b>{label}</b>. Use desktop Chrome or Edge. Plug the dongle in over USB, press <b>Flash</b>, then pick the
 dongle's port (usually "USB JTAG/serial debug unit"). This writes the firmware and keeps the dongle's owner key and
-Bluetooth pairings. If the port doesn't appear: unplug, hold the BOOT button while plugging back in, release, and try again.</p>
+Bluetooth pairings. If the port doesn't appear: unplug, hold the BOOT button (G0 on a Cardputer) while plugging back in, release, and try again.</p>
 <p><button id="go">Flash</button></p>
 <progress id="bar" value="0" max="1"></progress>
 <pre id="log"></pre>

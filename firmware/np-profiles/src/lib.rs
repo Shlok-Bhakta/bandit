@@ -448,6 +448,8 @@ pub struct Profile {
     /// The set's `everywhere` bindings: they win over this profile's own, for the kinds of host
     /// they cover.
     pub everywhere: BTreeMap<Gesture, Binding>,
+    /// The app's colour for it (0xRRGGBB), when it set one: anything else there is ignored.
+    pub color: Option<u32>,
 }
 
 impl Profile {
@@ -602,6 +604,9 @@ struct RawProfile {
     gestures: BTreeMap<String, Value>,
     #[serde(default)]
     apps: Vec<String>,
+    /// The app's own colour for it (`#rrggbb`): the dongle's screen and light use it too.
+    #[serde(default)]
+    color: Option<Value>,
 }
 
 impl RawFile {
@@ -658,6 +663,7 @@ impl RawFile {
             profiles.push(Profile {
                 id: raw.id.clone(), name: raw.name.clone(), buzz, hosts,
                 typing: raw.typing, pointer: raw.pointer, gestures, apps: raw.apps.clone(), everywhere: everywhere.clone(),
+                color: raw.color.as_ref().and_then(Value::as_str).and_then(parse_color),
             });
         }
         let mut menu = BTreeMap::new();
@@ -724,6 +730,13 @@ const RESERVED_IDS: [&str; 5] = ["next", "previous", "back", "home", "app"];
 
 fn valid_id(id: &str) -> bool {
     (1..=16).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// `#rrggbb` (the app's form), as 0xRRGGBB.
+fn parse_color(text: &str) -> Option<u32> {
+    let hex = text.strip_prefix('#')?;
+    if hex.len() != 6 { return None; }
+    u32::from_str_radix(hex, 16).ok()
 }
 
 fn unknown_hosts(name: &str) -> String {

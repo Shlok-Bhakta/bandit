@@ -407,6 +407,7 @@ impl<'a> Controller<'a> {
         let Some(active) = self.active() else { return };
         let Some(action) = active.action(gesture).cloned() else { return };
         info!("GESTURE: {} in {}: {action:?}", gesture.name(), active.profile().id);
+        crate::cardputer::gesture(&gesture.name(), &action);
         if !self.perform(&action, gesture, &active.set, now) { return; }
         // Its own buzz, else the set's `gesture` one (switches and buzzes say enough by themselves).
         match active.profile().buzz(gesture, active.kind.host_kind()).cloned() {

@@ -1,6 +1,6 @@
 [package]
 name = "band-dongle"
-version = "0.17.0"
+version = "0.18.0"
 edition = "2021"
 description = "Meta Neural Band dongle: connects to the band with its owner key (band-core) and exposes it as system input"
 license = "MIT"
@@ -51,6 +51,9 @@ embassy-time = { version = "0.5", features = ["generic-queue-8"] }
 esp32-nimble = "0.13"
 # air-gestures' band-core 4b59393, vendored with fixes for updated band firmware (see ../band-core/VENDORED.md).
 band-core = { path = "../band-core" }
+# The Cardputer's screen (cardputer.rs): text drawn into its frame.
+embedded-graphics-core = "0.4"
+u8g2-fonts = "0.8"
 # The gesture profiles (PROFILES.md), shared with the app's test vectors.
 np-profiles = { path = "../np-profiles" }
 

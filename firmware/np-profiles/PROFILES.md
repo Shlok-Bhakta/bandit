@@ -85,8 +85,9 @@ earlier firmware did.
 | `gestures` | optional | Gesture → action, below |
 | `apps` | optional | Up to 16 Mac apps by bundle id (`com.google.Chrome`): a computer switches to this profile while one is in front (below). Each 1–64 of `A`–`Z`, `a`–`z`, `0`–`9`, `.`, `_`, `-`; an app in one profile only; only in a profile for computers |
 
-The app may add its own fields, like `description`, `symbol` (an SF Symbol) or `color`. The dongle
-ignores them, but they count towards the size limit.
+The app may add its own fields, like `description` or `symbol` (an SF Symbol). The dongle ignores
+them, but they count towards the size limit. `color` (`#rrggbb`) is the app's too, and the
+Cardputer's screen and LED show the profile in it (firmware 0.18; anything else there is ignored).
 
 **Size:** at most **6144 bytes** once minified, nested at most 12 deep (a file is 5). Five
 profiles take about 2.5 KB.

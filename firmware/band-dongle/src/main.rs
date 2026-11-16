@@ -10,6 +10,7 @@
 //! and never logged; only its public fingerprint is printed.
 
 mod ancs;
+mod cardputer;
 mod coc;
 mod control;
 mod controller;
@@ -44,8 +45,8 @@ const BAND_SERVICE: BleUuid = BleUuid::Uuid16(0xFEB8);
 /// What updated band firmware advertises (seen in the phone app's scan: "Services FD5F").
 const BAND_ADVERTISED: BleUuid = BleUuid::Uuid16(0xFD5F);
 const PSM_CHARACTERISTIC: BleUuid = uuid128!("2d41da7c-82b6-42aa-b34e-e2e01df8cc1a");
-/// The XIAO ESP32-S3's BOOT button: a press releases the band (so the phone app can use it) and
-/// another reclaims it; holding it 2 s opens a window for pairing a computer.
+/// The BOOT button (G0 on the Cardputer, BOOT on a XIAO ESP32-S3): a press releases the band (so
+/// the phone app can use it) and another reclaims it; holding it 2 s opens a window for pairing a computer.
 const BOOT_BUTTON: i32 = 0;
 
 /// Polled every 30 ms on the esp_timer task, not a thread of its own (3 KB of stack): it only
@@ -260,11 +261,67 @@ fn handle_serial(line: &str, nvs: &mut EspNvs<NvsDefault>, remote: &Remote) {
         UNPAIR_REQUEST.store(true, std::sync::atomic::Ordering::SeqCst);
     } else if let Some(encoded) = line.strip_prefix("OTA ") {
         control::serial_update(encoded.trim());
+    } else if let Some(rest) = line.strip_prefix("IDENTITY").filter(|rest| rest.is_empty() || rest.starts_with(' ')) {
+        identity_command(rest.trim(), nvs);
     } else if line == "HELP" {
-        info!("Commands: OWNER <base64>, FORGET, PAUSE, RESUME, UNPAIR, and the app's control commands (CONTROL.md: status, target, mode, pair, key, ...)");
+        info!("Commands: OWNER <base64>, FORGET, PAUSE, RESUME, UNPAIR, IDENTITY [<mac>|clear], and the app's control commands (CONTROL.md: status, target, mode, pair, key, ...)");
     } else if !line.is_empty() {
         control::run(remote, line, None);
     }
+}
+
+/// NVS key of the base MAC address this dongle answers to in place of its chip's own (6 bytes),
+/// when it took another dongle's place (`IDENTITY`): the band and the paired hosts know a dongle by
+/// its Bluetooth address, so with the other's NVS copied over too nothing needs pairing again.
+const IDENTITY_KEY: &str = "mac";
+
+fn read_mac(kind: esp_idf_svc::sys::esp_mac_type_t) -> [u8; 6] {
+    let mut mac = [0u8; 6];
+    unsafe { esp_idf_svc::sys::esp_read_mac(mac.as_mut_ptr(), kind) };
+    mac
+}
+
+fn mac_text(mac: &[u8; 6]) -> String { mac.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":") }
+
+/// Before Bluetooth starts: the saved identity, if there is one.
+fn adopt_identity(nvs: &EspNvs<NvsDefault>) {
+    let mut mac = [0u8; 6];
+    let Ok(Some(saved)) = nvs.get_blob(IDENTITY_KEY, &mut mac) else { return };
+    if saved.len() != 6 { return warn!("IDENTITY: the saved one isn't 6 bytes; using the chip's own"); }
+    let rc = unsafe { esp_idf_svc::sys::esp_base_mac_addr_set(mac.as_ptr()) };
+    if rc == 0 {
+        info!("IDENTITY: answering as {} (Bluetooth {}), not this chip's own", mac_text(&mac), mac_text(&read_mac(esp_idf_svc::sys::esp_mac_type_t_ESP_MAC_BT)));
+    } else {
+        warn!("IDENTITY: couldn't use {} (rc {rc}); using the chip's own", mac_text(&mac));
+    }
+}
+
+/// `IDENTITY` (show it), `IDENTITY <aa:bb:cc:dd:ee:ff>` (answer as that base MAC from the next
+/// boot) or `IDENTITY clear` (the chip's own again). Serial only: it needs the dongle in hand.
+fn identity_command(arg: &str, nvs: &mut EspNvs<NvsDefault>) {
+    let chip = {
+        let mut mac = [0u8; 6];
+        unsafe { esp_idf_svc::sys::esp_efuse_mac_get_default(mac.as_mut_ptr()) };
+        mac
+    };
+    if arg.is_empty() {
+        return info!("IDENTITY: base {} (the chip's own is {}), Bluetooth {}", mac_text(&read_mac(esp_idf_svc::sys::esp_mac_type_t_ESP_MAC_BASE)),
+                     mac_text(&chip), mac_text(&read_mac(esp_idf_svc::sys::esp_mac_type_t_ESP_MAC_BT)));
+    }
+    let result = if arg == "clear" {
+        nvs.remove(IDENTITY_KEY).map(|_| ())
+    } else {
+        let bytes: Vec<u8> = arg.split([':', '-']).filter_map(|part| u8::from_str_radix(part, 16).ok()).collect();
+        let Ok(mac) = <[u8; 6]>::try_from(bytes) else { return error!("IDENTITY: a MAC is six hex bytes, like 24:EC:4A:00:4F:54") };
+        if mac[0] & 1 != 0 { return error!("IDENTITY: {} is a multicast address", mac_text(&mac)); }
+        nvs.set_blob(IDENTITY_KEY, &mac)
+    };
+    match result {
+        Ok(()) => info!("IDENTITY: {} from the next boot. Rebooting.", if arg == "clear" { "the chip's own".to_string() } else { arg.to_uppercase() }),
+        Err(error) => return error!("IDENTITY: couldn't save it: {error}"),
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    unsafe { esp_idf_svc::sys::esp_restart() };
 }
 
 /// How a session went, for choosing the next scheme-26 guess.
@@ -626,10 +683,13 @@ fn main() -> anyhow::Result<()> {
     let mut mark = |step| marks.push((step, memory::free()));
     let partition = EspDefaultNvsPartition::take()?;
     let nvs = EspNvs::new(partition.clone(), "np", true)?;
+    adopt_identity(&nvs);
     mark("NVS");
-    // Bluetooth's buffer pools and tasks, kept for good: what doesn't fit 32 KB of the main region
-    // goes to the spare ones (they then hold 41 KB of it, 0.15.2).
-    let device = memory::in_spare_regions(32 * 1024, BLEDevice::take);
+    // Bluetooth's buffer pools and tasks, kept for good: what doesn't fit 48 KB of the main region
+    // goes to the spare ones (they then hold 41 KB of it, 0.15.2). 32 KB was too few on a chip's
+    // first boot (0.18.0, a fresh Cardputer): the radio's full calibration took the rest, and
+    // NimBLE's task didn't fit.
+    let device = memory::in_spare_regions(48 * 1024, BLEDevice::take);
     memory::watch_lowest();
     device.security().set_auth(AuthReq::Bond | AuthReq::Sc).set_io_cap(SecurityIOCap::NoInputNoOutput).resolve_rpa();
     let mut client = device.new_client();
@@ -647,6 +707,7 @@ fn main() -> anyhow::Result<()> {
     ota::confirm_after_probation();
     spawn_serial_reader(partition, remote.clone());
     watch_boot_button();
+    cardputer::start(remote.clone());
     mark("threads");
     let steps: Vec<String> = marks.windows(2).map(|pair| format!("{} {} B", pair[1].0, pair[0].1 as isize - pair[1].1 as isize)).collect();
     info!("memory at boot: {} B free at start; {}; {} B free now", marks[0].1, steps.join(", "), memory::free());

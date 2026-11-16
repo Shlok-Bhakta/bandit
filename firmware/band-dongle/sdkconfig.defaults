@@ -67,3 +67,7 @@ CONFIG_BT_CTRL_SCAN_DUPL_CACHE_SIZE=30
 CONFIG_ESP_COEX_SW_COEXIST_ENABLE=n
 # The Bluetooth controller stays in IRAM (0.15.2 ran it from flash for 19.5 KB): radio timing
 # shouldn't stall while flash is written or on cache misses.
+
+# The Cardputer's screen (cardputer.rs) is drawn a few times a second at most: its SPI interrupt
+# can wait out a flash write, and stays out of IRAM (whose growth comes out of the heap).
+CONFIG_SPI_MASTER_ISR_IN_IRAM=n

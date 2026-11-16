@@ -935,6 +935,25 @@ impl Remote {
                                        set.profiles[state.effective(&set, host)].id.clone())).collect()
     }
 
+    /// One key, with exactly these modifiers, on the active computer (the Cardputer's keyboard
+    /// typing): not logged, since it could be a password. False when there's no computer to type on.
+    pub fn press_key(&self, modifiers: u8, usage: u8) -> bool {
+        let _keys = self.0.keys.lock().unwrap();
+        let handle = {
+            let state = self.0.state.lock().unwrap();
+            match state.active.and_then(|active| state.hosts.iter().find(|host| host.handle == active)) {
+                Some(host) if host.kind.keyboard() => host.handle,
+                _ => return false,
+            }
+        };
+        let keyboard = self.0.keyboard.lock();
+        let sent = keyboard.notify_with(&[modifiers, 0, usage, 0, 0, 0, 0, 0], handle);
+        esp_idf_svc::hal::delay::FreeRtos::delay_ms(10);
+        let _ = keyboard.notify_with(&[0; 8], handle);
+        if let Err(error) = &sent { warn!("a typed key failed: {error:?}"); }
+        sent.is_ok()
+    }
+
     /// Types text on the active host (US layout), one key at a time.
     pub fn type_text(&self, text: &str) {
         for c in text.chars() {

@@ -259,3 +259,12 @@ fn modes_everywhere_bindings_win_for_the_kinds_they_cover() {
     assert_eq!(set.menu.get(&'h'), Some(&Action::Profile(ProfileTarget::Home)));
     assert_eq!(home.buzz, set.pattern("home").unwrap());
 }
+
+#[test]
+fn the_apps_colour_is_read_and_anything_else_there_ignored() {
+    let json = |color: &str| format!(r#"{{"format":"np-profiles","version":1,"profiles":[{{"id":"a","name":"A","color":{color}}}]}}"#);
+    assert_eq!(ProfileSet::parse(&json("\"#ff616b\"")).unwrap().profiles[0].color, Some(0xff616b));
+    for other in ["\"red\"", "\"#fff\"", "3", "null"] {
+        assert_eq!(ProfileSet::parse(&json(other)).unwrap().profiles[0].color, None, "{other}");
+    }
+}

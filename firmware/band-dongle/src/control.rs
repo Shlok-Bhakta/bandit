@@ -22,9 +22,9 @@ const LOG: BleUuid = uuid128!("4e500103-3c1a-4e0b-9d1e-6f2b5a7c8d90");
 const UPDATE: BleUuid = uuid128!("4e500104-3c1a-4e0b-9d1e-6f2b5a7c8d90");
 const CHANGED: BleUuid = uuid128!("4e500105-3c1a-4e0b-9d1e-6f2b5a7c8d90");
 
-/// `band pause` / the BOOT button: the band is released so the phone app can use it.
+/// `band pause` / the G0 button (the XIAO's BOOT): the band is released so the phone app can use it.
 pub static PAUSED: AtomicBool = AtomicBool::new(false);
-/// The BOOT button was pressed (it toggled `PAUSED`), or held 2 s (pair a computer): the control
+/// The G0 button was pressed (it toggled `PAUSED`), or held 2 s (pair a computer): the control
 /// thread logs it and opens the window.
 pub static BUTTON_PRESSED: AtomicBool = AtomicBool::new(false);
 pub static BUTTON_HELD: AtomicBool = AtomicBool::new(false);
@@ -92,6 +92,8 @@ pub fn set_band_battery(level: u8, charging: Option<bool>, detail: Option<Batter
 static BATTERY_EVERY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(120);
 pub fn battery_every() -> f64 { f64::from(BATTERY_EVERY.load(Ordering::Relaxed)) }
 pub fn set_band_hand(hand: Option<&'static str>) { BAND.lock().unwrap().hand = hand; }
+/// The band as the status reports it (the Cardputer's screen shows it too).
+pub fn band() -> Band { BAND.lock().unwrap().clone() }
 
 // ---- the log: everything logged through `log` also lands in a ring for the app ----
 

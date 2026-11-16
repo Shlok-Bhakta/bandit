@@ -1,16 +1,57 @@
 # band-dongle (Rust, ESP32-S3)
 
-Your Meta Neural Band without a phone app. A Seeed XIAO ESP32-S3 connects to the band as its owner
+Your Meta Neural Band without a phone app. An M5Stack Cardputer ADV (an ESP32-S3 with a screen
+and a keyboard; any ESP32-S3 with 8 MB of flash runs it headless, like the Seeed XIAO it started
+on) connects to the band as its owner
 using **band-core** (air-gestures' Rust protocol core, vendored in `../band-core` with fixes for
 updated band firmware). It shows up as one Bluetooth device, **NP Band Remote**, that an iPhone and
 a laptop can both be paired with. Gestures go to **one active host at a time**, never mirrored. It
 works system-wide, in any app and on the lock screen. No software on the laptop.
 
 ```
-Band ──BLE + L2CAP, encrypted, owner key──▶ XIAO ESP32-S3 ──BLE HID──▶ the active host (iPhone or laptop)
-                                                  ▲
+Band ──BLE + L2CAP, encrypted, owner key──▶ Cardputer (ESP32-S3) ──BLE HID──▶ the active host (iPhone or laptop)
+                                                  ▲          screen + keyboard
                     Neural Playground app ── control service: status, routing, logs, signed updates
 ```
+
+## The Cardputer (v0.18)
+
+The screen shows the band (a breathing green dot while it's live, its battery), the active
+profile big on a card in its colour (the app's `color`, or the built-in profiles' own), which
+device it's on, and each gesture as it happens (`Index tap  >  Play/Pause`). An open pairing window
+shows at the bottom with its seconds left, and an update its progress on the card. The LED glows faintly in the
+profile's colour and flashes with each gesture. The Cardputer's own battery is at the top right.
+
+| Key | Does |
+|---|---|
+| `,` `/` | Previous / next profile (the arrows' keys) |
+| `1`–`9` | That profile |
+| `tab` (`shift tab`) | Next (previous) device |
+| `space` | Play/pause; `;` `.` volume up/down; `[` `]` previous/next track |
+| `P` (or **G0**) | Release the band for the phone app, and take it back; hold G0 2 s to pair a computer |
+| `B` | Buzz the band (find it) |
+| `A` / `I` | Open a pairing window for a computer / a phone (`` ` `` closes it) |
+| `fn K` (or `K`) | Keyboard mode: what you type goes to the active computer (`opt` is ⌘, `fn ; , . /` the arrows, `fn 1`… F1…); `fn K` again ends it. Typed keys aren't logged |
+| `H` | The list of keys |
+
+It's recognised by its keyboard controller (a TCA8418 on G8/G9). Without one (a XIAO, or a
+Cardputer v1.1, whose keyboard is a plain matrix) the same firmware runs headless. The screen is
+drawn in five 27-row bands (3 KB, not a 16 KB frame), and only when what it shows changes.
+
+### Moving the dongle to another board
+
+The band and every paired host know the dongle by its Bluetooth address, and the owner key,
+pairings and profiles live in NVS. So a new board takes the old one's place by taking both. The
+key never leaves the two boards and the machine they're plugged into:
+
+1. Flash v0.18 or later onto the old board (`make flash`; NVS is kept), then on its serial
+   `IDENTITY <its MAC>` (`IDENTITY` alone shows it): it now carries its address in NVS.
+2. Copy its NVS, leaving it in its bootloader so it goes quiet:
+   `espflash read-flash --after no-reset 0x9000 0x6000 nvs.bin` (keep the file private: it holds the key).
+3. Flash the new board, then `espflash write-bin 0x9000 nvs.bin`. It boots as the old one: the band
+   is live in seconds and the hosts reconnect, nothing re-paired.
+4. Unplug the old board and don't power it again as it is: two dongles with one address fight
+   over the band. (`IDENTITY clear` and `FORGET` on it first, if you want to reuse it.)
 
 ## Hosts: up to five at once
 
@@ -28,8 +69,8 @@ Each host reads its own report map when it pairs and caches it: phones one witho
 and a mouse since 0.16), everything else the keyboard and mouse one. So a Mac, PC or TV can be relabelled later (the app: touch and hold
 the host; or `kind <h> windows`), but a phone ↔ anything else needs pairing again. New devices pair
 as phones. To pair anything else, plug the dongle into it (a Mac pairing window is open for 2
-minutes after power-up), or open a window: the app's "Pair a computer or TV", holding the dongle's
-BOOT button 2 s (a Mac), or `make cmd C='pair windows'` (`phone|mac|windows|linux|tv`). Then
+minutes after power-up), or open a window: the app's "Pair a computer or TV", the Cardputer's `A`
+(or holding G0 2 s: a Mac), or `make cmd C='pair windows'` (`phone|mac|windows|linux|tv`). Then
 connect **NP Band Remote** in its Bluetooth settings within 2 minutes. A device that just paired becomes the active host. Pairing is closed otherwise: an unknown device that
 pairs outside a window is disconnected and its pairing deleted. (Pairings from before v0.6 were
 adopted as phones.)
@@ -319,6 +360,12 @@ update, forget **NP Band Remote** on it and pair again (in a pairing window).
   failed the SHA check and the slot didn't change. **Not yet verified:** the Bluetooth transport
   from the app, a second host (laptop), per-host report maps, the pinch-hold switch, slides keys.
 
+- v0.18.0 (2026-11-16): on a Cardputer ADV, with the XIAO's NVS and address (above): band live 6.7 s
+  after boot, iPhone and Mac reconnected without pairing, the same owner fingerprint and profile
+  set, self-test passed. Heap while streaming: 149 KB free, 132 KB lowest, 129 KB largest block
+  (the XIAO on 0.17: 161, 145, 147). The same image on the XIAO runs headless and the band is live.
+  **Not yet verified:** what the screen looks like, the keys, the LED (no one had looked yet).
+
 ## Build, flash, serial
 
 ```sh
@@ -370,8 +417,9 @@ Serial commands (type a line, then Enter):
 |---|---|
 | `OWNER <base64>` | Store the owner key, the `owner_key` field of air-gestures-band.json (NVS, never compiled in) |
 | `FORGET` | Delete the stored owner key (and the scheme-26 guess) |
-| `PAUSE` / `RESUME` | Release or reclaim the band (same as the BOOT button) |
+| `PAUSE` / `RESUME` | Release or reclaim the band (same as G0, the BOOT button) |
 | `UNPAIR` | Forget the Bluetooth pairing with the band (put the band in pairing mode to pair again) |
+| `IDENTITY` | Show the address the dongle answers as. `IDENTITY <aa:bb:cc:dd:ee:ff>` answers as that base MAC from the next boot (taking another dongle's place, above); `IDENTITY clear`, the chip's own again |
 | anything else | An app control command ([CONTROL.md](CONTROL.md)): `status`, `target next`, `profile slides`, `pair computer`, `key teamsmute`, ... |
 
 ## Security notes
@@ -381,3 +429,4 @@ Serial commands (type a line, then Enter):
 - Hosts pair with "Just Works" (no passkey), but only inside a pairing window (or while no host is known).
 - Updates must carry this dongle's signature; the private key never leaves the build Mac.
 - The bond with the band and the owner key survive reflashing. They're erased only by `FORGET` or `espflash erase-flash`.
+- `IDENTITY` is serial only (the dongle in hand), never the control service: a phone can't make the dongle answer as something else.

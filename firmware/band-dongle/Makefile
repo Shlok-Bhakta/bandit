@@ -1,4 +1,4 @@
-# band-dongle: `make help` lists the targets. PORT defaults to the XIAO on this Mac.
+# band-dongle: `make help` lists the targets. PORT defaults to a dongle plugged into this Mac.
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
@@ -44,9 +44,12 @@ WAIT ?= 25
 # ~/$(REMOTE_DIR)). Unset: the dongle is on this Mac's PORT.
 REMOTE ?=
 REMOTE_DIR ?= np-dongle
+# With two boards plugged in there: which one (REMOTE_PORT=/dev/serial/by-id/usb-Espressif_…).
+REMOTE_PORT ?=
+RUN = $(if $(REMOTE_PORT),env NP_PORT=$(REMOTE_PORT) )$(REMOTE_DIR)/run
 ifdef REMOTE
 # $(call tool,script.py,args): the script gets the dongle's port first, here or there.
-tool = ssh $(REMOTE) $(REMOTE_DIR)/run $(1) $(2)
+tool = ssh $(REMOTE) $(RUN) $(1) $(2)
 TOOLS_READY = remote-sync
 else
 tool = $(PY) -I tools/$(1) $(PORT) $(2)
@@ -101,7 +104,7 @@ flash: build $(TOOLS_READY)
 ifdef REMOTE
 	scp -q $(BOOTLOADER) $(REMOTE):$(REMOTE_DIR)/flash/bootloader.bin
 	scp -q partitions.csv $(ELF) $(REMOTE):$(REMOTE_DIR)/flash/
-	ssh $(REMOTE) $(REMOTE_DIR)/run flash
+	ssh $(REMOTE) $(RUN) flash
 else
 	$(ESPFLASH) flash --port $(PORT) --chip esp32s3 --flash-size 8mb --flash-freq 80mhz \
 	  --bootloader $(BOOTLOADER) --partition-table partitions.csv \
@@ -141,7 +144,7 @@ log: $(TOOLS_READY)
 capture:
 	@test -n "$(REMOTE)" || { echo "capture runs on REMOTE (config.mk)"; exit 1; }
 	@$(MAKE) -s remote-sync
-	@ssh $(REMOTE) 'pgrep -f "tools/[l]og_capture.py" >/dev/null && echo "already capturing" || { setsid nohup $(REMOTE_DIR)/run log_capture.py >/dev/null 2>&1 < /dev/null & sleep 1; echo "capturing to ~/$(REMOTE_DIR)/logs"; }'
+	@ssh $(REMOTE) 'pgrep -f "tools/[l]og_capture.py" >/dev/null && echo "already capturing" || { setsid nohup $(RUN) log_capture.py >/dev/null 2>&1 < /dev/null & sleep 1; echo "capturing to ~/$(REMOTE_DIR)/logs"; }'
 
 # A serial command (CONTROL.md) through the running capture, which keeps the port (and the dongle) up.
 capture-cmd:

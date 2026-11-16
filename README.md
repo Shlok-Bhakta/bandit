@@ -7,9 +7,10 @@ Use a **Meta Neural Band** without Meta's glasses or app:
 - **Neural Playground (iOS):** connects the band directly to an iPhone. Claim the band once, keep
   the owner key, and reuse it on Linux, Mac and iPhone. It also has a live gesture dashboard, a
   haptics lab, a raw EMG viewer and two games you play with your fingers.
-- **Band remote dongle (ESP32-S3, Rust):** a ~$7 Seeed XIAO ESP32-S3 holds the band and shows up as
-  one Bluetooth keyboard/remote, **NP Band Remote**, that up to five devices (iPhone, Mac, Windows,
-  Linux, a TV) pair with at once. Gestures go to one of them at a time: media keys, slides, typing
+- **Band remote dongle (ESP32-S3, Rust):** an M5Stack Cardputer ADV (or any ESP32-S3, headless) holds
+  the band and shows up as one Bluetooth keyboard/remote, **NP Band Remote**, that up to five devices
+  (iPhone, Mac, Windows, Linux, a TV) pair with at once. Its screen shows the band, the device and
+  the profile in the profile's colour; its keyboard switches them, or types on a computer. Gestures go to one of them at a time: media keys, slides, typing
   by handwriting, an air mouse, the GitHub Copilot app. See [firmware/band-dongle](firmware/band-dongle/README.md).
 - **NP Dongle (iOS):** the dongle's own app. Hosts and pairing, switching each host's gesture
   profile, editing profiles (a JSON file you can export, hand to an AI assistant and import back;
