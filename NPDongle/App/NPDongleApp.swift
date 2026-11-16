@@ -61,7 +61,8 @@ struct RootView: View {
         case "editor":
             if let profile = model.store.set.profiles.first { ProfileEditorView(uid: profile.uid) }
         case "band":
-            if let profile = model.store.set.profiles.first { BandEventsView(uid: profile.uid) }
+            if let profile = model.store.set.profiles.first { BandEventsView(target: .profile(profile.uid)) }
+        case "everywhere": EverywhereView()
         default: ProfilesView()
         }
         #else

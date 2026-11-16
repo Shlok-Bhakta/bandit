@@ -63,9 +63,9 @@ struct MenuLetterEditor: View {
         Form {
             Section {
                 ActionEditor(action: Binding(get: { store.set.menu[letter] }, set: { store.set.menu[letter] = $0 ?? "none" }),
-                             context: ActionContext(ids: store.set.ids, allowsHold: false, allowsMenu: false, allowsUnset: false, path: "menu.\(letter)"))
+                             context: ActionContext(ids: store.set.ids, allowsHold: false, allowsPoint: false, allowsMenu: false, allowsUnset: false, path: "menu.\(letter)"))
             } footer: {
-                Text("Anything but a held key or the menu itself. Switching profile buzzes that profile's count; switching host buzzes once for a phone, twice for a computer.")
+                Text("Anything but a held key, the air mouse or the menu itself. Switching profile buzzes that profile's count and goes up a level (Back returns); switching host buzzes once for a phone, twice for a computer.")
             }
             Section {
                 Button("Remove \(letter.uppercased()) from the menu", role: .destructive) { store.set.menu[letter] = nil }
@@ -75,6 +75,74 @@ struct MenuLetterEditor: View {
         .screenBackground()
         .navigationTitle("Letter \(letter.uppercased())")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// The set's `everywhere` bindings: gestures that do the same in every profile, winning over its own.
+struct EverywhereView: View {
+    @Environment(DongleModel.self) private var model
+
+    private var store: ProfileStore { model.store }
+
+    var body: some View {
+        let everywhere = store.set.everywhere
+        let bound = ProfileGesture.allCases.filter { everywhere[$0.rawValue] != nil }
+        let unknown = everywhere.keys.filter { ProfileGesture(rawValue: $0) == nil }.sorted()
+        List {
+            if let error = store.validation, error.path.hasPrefix("everywhere.") {
+                Section {
+                    Label("The dongle would refuse this", systemImage: "exclamationmark.triangle.fill").foregroundStyle(Theme.danger)
+                    ProblemText(error: error)
+                }
+            }
+            Section {
+                ForEach(bound, id: \.self) { gesture in
+                    NavigationLink {
+                        BindingEditorView(target: .everywhere, gesture: gesture)
+                    } label: {
+                        GestureRow(gesture: gesture, binding: everywhere[gesture.rawValue], broken: store.validation?.path.hasPrefix("everywhere.\(gesture.rawValue)") == true)
+                    }
+                }
+                .onDelete { offsets in
+                    for offset in offsets { store.set.everywhere[bound[offset].rawValue] = nil }
+                }
+                ForEach(unknown, id: \.self) { name in
+                    HStack {
+                        Text("\(name) (unknown)").font(.callout.monospaced()).foregroundStyle(Theme.danger)
+                        Spacer()
+                        Button("Remove") { store.set.everywhere[name] = nil }
+                    }
+                }
+                let free = ProfileGesture.named.filter { everywhere[$0.rawValue] == nil }
+                if !free.isEmpty {
+                    Menu {
+                        ForEach(ProfileGesture.Group.allCases.filter { $0 != .band }, id: \.self) { group in
+                            Section(group.rawValue) {
+                                ForEach(free.filter { $0.group == group }, id: \.self) { gesture in
+                                    Button(gesture.title) { store.set.everywhere[gesture.rawValue] = .action("profile:back") }
+                                }
+                            }
+                        }
+                    } label: {
+                        Label("Add a gesture", systemImage: "plus.circle")
+                    }
+                }
+                NavigationLink { BandEventsView(target: .everywhere) } label: { Label("Bind a band event…", systemImage: "plus.circle") }
+                if everywhere[ProfileGesture.flickDown.rawValue] == nil, everywhere[ProfileGesture.flickUp.rawValue] == nil {
+                    Button {
+                        store.set.everywhere[ProfileGesture.flickDown.rawValue] = .action("profile:back")
+                        store.set.everywhere[ProfileGesture.flickUp.rawValue] = .byHost(["computer": "profile:app"])
+                    } label: {
+                        Label("Add the flicks: down back, up into the app", systemImage: "arrow.up.arrow.down")
+                    }
+                }
+            } footer: {
+                Text("Everywhere bindings work in every profile and win over its own. Flicks get you around: down goes back (home at the bottom, with home's buzz), up goes into the app in front. A binding for some kinds of host only (Any computer, say) leaves the others each profile's own. Firmware 0.17.")
+            }
+        }
+        .darkList()
+        .navigationTitle("Everywhere")
+        .toolbar { EditButton() }
     }
 }
 
@@ -90,7 +158,7 @@ struct StartProfilesView: View {
             row("computer", title: "Computers", symbol: "laptopcomputer", types: [.mac, .windows, .linux])
             row("tv", title: "TVs", symbol: "tv", types: [.tv])
             Section {} footer: {
-                Text("A new host starts in this profile; after that each host remembers what you last chose for it. Automatic: the first profile that allows that kind of host. A computer's start profile must allow Mac, Windows and Linux.")
+                Text("A new host starts in this profile; after that each host remembers what you last chose for it. It's also home: where Home goes, and where Back ends up (playing its buzz, so give it a pattern of its own). Automatic: the first profile that allows that kind of host. A computer's start profile must allow Mac, Windows and Linux.")
             }
         }
         .scrollContentBackground(.hidden)

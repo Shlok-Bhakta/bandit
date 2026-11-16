@@ -49,9 +49,9 @@ struct ProfileEditorView: View {
                 Section(group.rawValue) {
                     ForEach(ProfileGesture.allCases.filter { $0.group == group }, id: \.self) { gesture in
                         NavigationLink {
-                            BindingEditorView(uid: uid, gesture: gesture)
+                            BindingEditorView(target: .profile(uid), gesture: gesture)
                         } label: {
-                            GestureRow(gesture: gesture, binding: profile.wrappedValue[gesture],
+                            GestureRow(gesture: gesture, binding: profile.wrappedValue[gesture], everywhere: store.set.everywhere[gesture.rawValue],
                                        broken: problem(index)?.path.hasPrefix("profiles[\(index)].gestures.\(gesture.rawValue)") == true)
                         }
                     }
@@ -60,13 +60,13 @@ struct ProfileEditorView: View {
             Section {
                 ForEach(ProfileGesture.band.filter { profile.wrappedValue[$0] != nil }, id: \.self) { gesture in
                     NavigationLink {
-                        BindingEditorView(uid: uid, gesture: gesture)
+                        BindingEditorView(target: .profile(uid), gesture: gesture)
                     } label: {
-                        GestureRow(gesture: gesture, binding: profile.wrappedValue[gesture],
+                        GestureRow(gesture: gesture, binding: profile.wrappedValue[gesture], everywhere: store.set.everywhere[gesture.rawValue],
                                    broken: problem(index)?.path.hasPrefix("profiles[\(index)].gestures.\(gesture.rawValue)") == true)
                     }
                 }
-                NavigationLink { BandEventsView(uid: uid) } label: { Label("Bind a band event…", systemImage: "plus.circle") }
+                NavigationLink { BandEventsView(target: .profile(uid)) } label: { Label("Bind a band event…", systemImage: "plus.circle") }
                 FirmwareFeatureNote()
             } header: { Text("Band events (experimental)") }
             Section {
@@ -91,7 +91,7 @@ struct ProfileEditorView: View {
             } header: {
                 Text("Profile")
             } footer: {
-                Text("The id is what menu letters and profile: actions use (1–16 of a–z, 0–9 and -). Renaming it updates them.")
+                Text("The id is what menu letters and profile: actions use (1–16 of a–z, 0–9 and -, but not next, previous, back, home or app). Renaming it updates them.")
             }
             Section("Look") {
                 SymbolPicker(symbol: optional(profile.symbol), tint: profile.wrappedValue.tint)
@@ -141,6 +141,8 @@ struct ProfileEditorView: View {
     private var idHint: some View {
         if !ProfileFormat.isValidID(draftID) {
             Text("1–16 of a–z, 0–9 and -").font(.caption).foregroundStyle(Theme.danger)
+        } else if ProfileFormat.reservedIDs.contains(draftID) {
+            Text("“\(draftID)” means something else in profile: actions: pick another id.").font(.caption).foregroundStyle(Theme.danger)
         } else if store.set.ids.contains(draftID) {
             Text("Another profile uses “\(draftID)”.").font(.caption).foregroundStyle(Theme.danger)
         } else {
@@ -151,7 +153,7 @@ struct ProfileEditorView: View {
     private func commitID() {
         let old = profile.wrappedValue.id
         guard draftID != old else { return }
-        guard ProfileFormat.isValidID(draftID), !store.set.ids.contains(draftID) else { return }
+        guard ProfileFormat.isValidID(draftID), !ProfileFormat.reservedIDs.contains(draftID), !store.set.ids.contains(draftID) else { return }
         store.rename(id: old, to: draftID)
     }
 
@@ -215,6 +217,8 @@ struct GestureRow: View {
     @Environment(DongleModel.self) private var model
     let gesture: ProfileGesture
     let binding: GestureBinding?
+    /// The set's `everywhere` binding for this gesture, which wins over a profile's own.
+    var everywhere: GestureBinding? = nil
     var broken = false
 
     var body: some View {
@@ -224,16 +228,25 @@ struct GestureRow: View {
                 Text(gesture.title)
                     .font(gesture.group == .band ? .callout.monospaced() : .body)
                     .lineLimit(1).minimumScaleFactor(0.75)
-                Text(summary).font(.caption).foregroundStyle(binding == nil ? .tertiary : .secondary).lineLimit(2)
+                if let everywhere {
+                    Text("\(Image(systemName: "globe")) Everywhere: \(Self.summary(everywhere, profileName: name))")
+                        .font(.caption).foregroundStyle(Theme.accent).lineLimit(2)
+                    if binding != nil || !everywhere.coversEveryHost {
+                        Text("Own: \(Self.summary(binding, profileName: name))").font(.caption).foregroundStyle(binding == nil ? .tertiary : .secondary).lineLimit(2)
+                    }
+                } else {
+                    Text(Self.summary(binding, profileName: name)).font(.caption).foregroundStyle(binding == nil ? .tertiary : .secondary).lineLimit(2)
+                }
             }
             Spacer()
             if broken { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.danger) }
         }
     }
 
-    private var summary: String {
+    private func name(_ id: String) -> String { model.store.set.profile(id: id)?.name ?? id }
+
+    static func summary(_ binding: GestureBinding?, profileName name: (String) -> String) -> String {
         guard let binding else { return "Not set" }
-        let name = { (id: String) in model.store.set.profile(id: id)?.name ?? id }
         let base = ActionKind.summary(binding.defaultAction, profileName: name)
         let overrides = binding.overrides
         guard !overrides.isEmpty else { return base }
@@ -243,31 +256,78 @@ struct GestureRow: View {
     }
 }
 
+extension GestureBinding {
+    /// Whether it has an action for every kind of host (as `everywhere`, a profile's own never runs).
+    var coversEveryHost: Bool {
+        DongleCommand.HostType.allCases.allSatisfy { type in action(for: type).map { $0 != "none" } ?? false }
+    }
+}
+
+/// Whose bindings an editor changes: a profile's own, or the set's `everywhere`.
+enum BindingTarget: Hashable {
+    case profile(UUID)
+    case everywhere
+}
+
+extension GestureProfileSet {
+    subscript(target: BindingTarget, gesture: ProfileGesture) -> GestureBinding? {
+        get {
+            switch target {
+            case .profile(let uid): profiles.first { $0.uid == uid }?[gesture]
+            case .everywhere: everywhere[gesture.rawValue]
+            }
+        }
+        set {
+            switch target {
+            case .profile(let uid): if let index = profiles.firstIndex(where: { $0.uid == uid }) { profiles[index][gesture] = newValue }
+            case .everywhere: everywhere[gesture.rawValue] = newValue
+            }
+        }
+    }
+
+    /// The validator's path for a gesture's binding.
+    func path(_ target: BindingTarget, _ gesture: ProfileGesture) -> String {
+        switch target {
+        case .profile(let uid): "profiles[\(profiles.firstIndex { $0.uid == uid } ?? 0)].gestures.\(gesture.rawValue)"
+        case .everywhere: "everywhere.\(gesture.rawValue)"
+        }
+    }
+}
+
 /// One gesture: the action for every host, and overrides for kinds of host.
 struct BindingEditorView: View {
     @Environment(DongleModel.self) private var model
-    let uid: UUID
+    let target: BindingTarget
     let gesture: ProfileGesture
 
     private var store: ProfileStore { model.store }
-    private var index: Int? { store.set.profiles.firstIndex { $0.uid == uid } }
-    private var binding: GestureBinding? { index.flatMap { store.set.profiles[$0][gesture] } }
+    private var binding: GestureBinding? { store.set[target, gesture] }
 
     private func update(default action: String?, overrides: [String: String]) {
-        guard let index else { return }
         var next = GestureBinding.make(default: action, overrides: overrides)
         if let buzz = binding?.buzz { if next == nil { next = .byHost([:]) }; next?.buzz = buzz }
-        store.set.profiles[index][gesture] = next
+        store.set[target, gesture] = next
     }
 
     private func context(_ key: String?) -> ActionContext {
-        let base = "profiles[\(index ?? 0)].gestures.\(gesture.rawValue)"
-        return ActionContext(ids: store.set.ids, allowsHold: gesture.allowsHold, allowsUnset: key == nil, path: key.map { "\(base).\($0)" } ?? base)
+        let base = store.set.path(target, gesture)
+        return ActionContext(ids: store.set.ids, allowsHold: gesture.allowsHold, allowsPoint: gesture.allowsPoint, allowsUnset: key == nil, path: key.map { "\(base).\($0)" } ?? base)
     }
 
     var body: some View {
         let overrides = binding?.overrides ?? [:]
         Form {
+            if case .profile = target, let everywhere = store.set.everywhere[gesture.rawValue] {
+                Section {
+                    Label("Everywhere: \(GestureRow.summary(everywhere, profileName: { store.set.profile(id: $0)?.name ?? $0 }))", systemImage: "globe")
+                        .foregroundStyle(Theme.accent)
+                    NavigationLink("Edit the Everywhere binding") { BindingEditorView(target: .everywhere, gesture: gesture) }
+                } footer: {
+                    Text(everywhere.coversEveryHost
+                         ? "The set's Everywhere binding wins on every host, so this profile's own never runs."
+                         : "The set's Everywhere binding wins for the kinds of host it has an action for; this profile's own runs on the others.")
+                }
+            }
             Section {
                 ActionEditor(action: Binding(get: { binding?.defaultAction }, set: { update(default: $0, overrides: overrides) }), context: context(nil))
             } header: {
@@ -277,10 +337,9 @@ struct BindingEditorView: View {
             }
             Section("When this gesture fires") {
                 Picker("Buzz", selection: Binding(get: { binding?.buzz ?? "" }, set: { name in
-                    guard let index else { return }
                     var next = binding ?? .byHost([:])
                     next.buzz = name.isEmpty ? nil : name
-                    store.set.profiles[index][gesture] = next
+                    store.set[target, gesture] = next
                 })) {
                     Text("Use set feedback").tag("")
                     ForEach(store.set.buzzNames, id: \.self) { Text($0).tag($0) }
@@ -319,15 +378,17 @@ struct BindingEditorView: View {
                     }
                 }
                 if binding != nil {
-                    Button("Clear this gesture", role: .destructive) { if let index { store.set.profiles[index][gesture] = nil } }
+                    Button(target == .everywhere ? "Remove from Everywhere" : "Clear this gesture", role: .destructive) { store.set[target, gesture] = nil }
                 }
             } footer: {
-                Text("The most specific kind wins (Mac beats Any computer), then “every other host”. “Nothing” means nothing, even when there's a default.")
+                Text(target == .everywhere
+                     ? "The most specific kind wins (Mac beats Any computer), then “every other host”. Kinds of host with no action here (or “Nothing”) keep each profile's own binding."
+                     : "The most specific kind wins (Mac beats Any computer), then “every other host”. “Nothing” means nothing, even when there's a default.")
             }
         }
         .scrollContentBackground(.hidden)
         .screenBackground()
-        .navigationTitle(gesture.title)
+        .navigationTitle(target == .everywhere ? "\(gesture.title) everywhere" : gesture.title)
         .navigationBarTitleDisplayMode(.inline)
     }
 }

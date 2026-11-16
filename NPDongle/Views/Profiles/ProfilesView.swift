@@ -46,7 +46,7 @@ struct ProfilesView: View {
             } header: {
                 Text("Profiles (\(store.set.profiles.count) of \(ProfileFormat.maxProfiles))")
             } footer: {
-                Text("Every host has its own active profile. On the band: pinch, hold and let go, then write a menu letter to switch.")
+                Text("Every host has its own active profile; its start profile is home. On the band: pinch, hold and let go, then write a menu letter to switch, or bind gestures to profile actions (Back returns to where you came from, and home in the end).")
             }
             Section {
                 NavigationLink { BuzzesView() } label: { Label("Buzzes", systemImage: "waveform") }
@@ -56,6 +56,18 @@ struct ProfilesView: View {
                         Text("\(store.set.menu.count) letters")
                     } label: {
                         Label("Letter menu", systemImage: "character.cursor.ibeam")
+                    }
+                }
+                NavigationLink(value: ProfileRoute.everywhere) {
+                    LabeledContent {
+                        HStack(spacing: 6) {
+                            if store.validation?.path.hasPrefix("everywhere.") == true {
+                                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.danger)
+                            }
+                            Text("\(store.set.everywhere.count) gestures")
+                        }
+                    } label: {
+                        Label("Everywhere", systemImage: "globe")
                     }
                 }
                 NavigationLink(value: ProfileRoute.start) { Label("Start profiles", systemImage: "flag") }
@@ -74,6 +86,7 @@ struct ProfilesView: View {
             switch route {
             case .profile(let uid): ProfileEditorView(uid: uid)
             case .menu: MenuEditorView()
+            case .everywhere: EverywhereView()
             case .start: StartProfilesView()
             case .reference: ReferenceView()
             }
@@ -200,7 +213,7 @@ struct ProfilesView: View {
 
 enum ProfileRoute: Hashable {
     case profile(UUID)
-    case menu, start, reference
+    case menu, everywhere, start, reference
 }
 
 struct ProfileRow: View {

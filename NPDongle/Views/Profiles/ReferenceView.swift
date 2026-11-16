@@ -9,7 +9,7 @@ struct ReferenceView: View {
     var body: some View {
         List {
             Section {
-                Text("A profile set is a JSON file: `format` \"np-profiles\", `version` 1, an optional `name`, `menu` and `start`, and 1–12 `profiles`. Each profile has an `id`, a `name`, and `gestures`: gesture name → action.")
+                Text("A profile set is a JSON file: `format` \"np-profiles\", `version` 1, an optional `name`, `menu`, `start` and `everywhere`, and 1–12 `profiles`. Each profile has an `id`, a `name`, and `gestures`: gesture name → action. `everywhere` has gestures too: they work in every profile and win over its own.")
                     .font(.callout)
                 Button {
                     Clipboard.copy(ProfileFormat.assistantBrief)
@@ -70,8 +70,9 @@ struct ReferenceView: View {
                 Text("Patterns: 20–2000 ms pulses, 20–3000 ms pauses, strength 1–100. Up to 16 steps, 8 seconds and 120 bytes; start and end with a pulse. Example: 250 _200 250*90.")
             }
             Section("Limits") {
-                ReferenceLine(title: "Profiles", text: "1–\(ProfileFormat.maxProfiles); ids 1–16 of a–z, 0–9, -; names 1–24 characters; buzz 1–4 or a pattern name")
-                ReferenceLine(title: "Menu", text: "one letter a–z or digit 0–9 → any action but hold: and menu")
+                ReferenceLine(title: "Profiles", text: "1–\(ProfileFormat.maxProfiles); ids 1–16 of a–z, 0–9, -, not \(ProfileFormat.reservedIDs.joined(separator: ", ")); names 1–24 characters; buzz 1–4 or a pattern name")
+                ReferenceLine(title: "Menu", text: "one letter a–z or digit 0–9 → any action but hold:, mouse:point and menu")
+                ReferenceLine(title: "Modes", text: "home is a host's start profile. profile:<id>, profile:app and the menu go up (two levels remembered); profile:back goes down one, home at the bottom (home's buzz again); profile:next and previous move sideways")
                 ReferenceLine(title: "Size", text: "at most \(ProfileFormat.maxBytes) bytes minified, the app's own fields (description, symbol, color) included")
             }
         }

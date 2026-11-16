@@ -183,7 +183,7 @@ struct FeedbackView: View {
 
 struct BandEventsView: View {
     @Environment(DongleModel.self) private var model
-    let uid: UUID
+    let target: BindingTarget
     @State private var finger = "thumb"
     @State private var search = ""
     private let common = ["swipeIn", "swipeOut", "click", "partialPress", "partialRelease", "partialClick", "partialUp", "partialDown", "partialLeft", "partialRight"]
@@ -205,8 +205,9 @@ struct BandEventsView: View {
     private func rows(_ events: [String]) -> some View {
         ForEach(events.filter { search.isEmpty || $0.localizedCaseInsensitiveContains(search) }, id: \.self) { event in
             let gesture = ProfileGesture(rawValue: "band." + (finger.isEmpty ? "" : finger + ".") + event)!
-            NavigationLink { BindingEditorView(uid: uid, gesture: gesture) } label: {
-                GestureRow(gesture: gesture, binding: model.store.set.profiles.first { $0.uid == uid }?[gesture], broken: false)
+            NavigationLink { BindingEditorView(target: target, gesture: gesture) } label: {
+                GestureRow(gesture: gesture, binding: model.store.set[target, gesture],
+                           everywhere: target == .everywhere ? nil : model.store.set.everywhere[gesture.rawValue], broken: false)
             }
         }
     }

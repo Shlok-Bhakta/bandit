@@ -171,7 +171,7 @@ struct OnTheBandSection: View {
         let profile = model.profile(id: profileID)
         Section {
             if let set {
-                let openers = Self.gestures(in: profile, for: host.type).filter { $0.action == "menu" }.map(\.gesture.title)
+                let openers = Self.gestures(in: profile, of: set, for: host.type).filter { $0.action == "menu" }.map(\.gesture.title)
                 Label {
                     Text(openers.isEmpty
                          ? "Nothing in \(model.profileName(id: profileID)) opens the letter menu. Switch profile here, or bind a gesture to Letter menu."
@@ -189,7 +189,7 @@ struct OnTheBandSection: View {
             }
             if let profile {
                 DisclosureGroup("Gestures in \(profile.name)") {
-                    ForEach(Self.gestures(in: profile, for: host.type), id: \.gesture) { item in
+                    ForEach(Self.gestures(in: profile, of: set, for: host.type), id: \.gesture) { item in
                         HStack(alignment: .firstTextBaseline) {
                             Text(item.gesture.title).foregroundStyle(.secondary)
                             Spacer(minLength: 12)
@@ -237,11 +237,12 @@ struct OnTheBandSection: View {
         return set.menu.keys.sorted { (rank($0), $0) < (rank($1), $1) }
     }
 
-    static func gestures(in profile: GestureProfile?, for type: DongleCommand.HostType) -> [(gesture: ProfileGesture, action: String)] {
+    /// What each gesture does in `profile` on `type`, the set's `everywhere` bindings included.
+    static func gestures(in profile: GestureProfile?, of set: GestureProfileSet?, for type: DongleCommand.HostType) -> [(gesture: ProfileGesture, action: String)] {
         guard let profile else { return [] }
+        let set = set ?? GestureProfileSet(profiles: [profile])
         return ProfileGesture.allCases.compactMap { gesture in
-            guard let action = profile.gestures[gesture.rawValue]?.action(for: type), action != "none" else { return nil }
-            return (gesture, action)
+            set.action(gesture, in: profile, for: type).map { (gesture, $0) }
         }
     }
 }

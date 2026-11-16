@@ -86,7 +86,7 @@ struct GestureLabView: View {
                 Button(profile.name) { if let name = bindingName, let gesture = ProfileGesture(rawValue: name) { route = .init(uid: profile.uid, gesture: gesture) }; bindingName = nil }
             }
         }
-        .sheet(item: $route) { route in NavigationStack { BindingEditorView(uid: route.uid, gesture: route.gesture).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { self.route = nil } } } } }
+        .sheet(item: $route) { route in NavigationStack { BindingEditorView(target: .profile(route.uid), gesture: route.gesture).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { self.route = nil } } } } }
     }
     private func refresh(force: Bool = false) {
         guard started, model.link.isReady, scenePhase == .active else { return }

@@ -7,6 +7,8 @@ struct ActionContext {
     var ids: [String]
     /// `hold:` (middle.hold only).
     var allowsHold: Bool
+    /// `mouse:point` (middle.hold only).
+    var allowsPoint: Bool
     /// `menu` (not inside the menu itself).
     var allowsMenu = true
     /// "Not set" (a gesture may be unbound; a menu letter or an override always has an action).
@@ -120,11 +122,7 @@ enum ActionKind: String, CaseIterable, Identifiable {
         case .menu: return "Letter menu"
         case .write: return "Handwriting (\(arg.isEmpty ? "\(ProfileFormat.writeSeconds)" : arg) s)"
         case .profile:
-            switch arg {
-            case "next": return "Next profile"
-            case "previous": return "Previous profile"
-            default: return "Profile: \(profileName(arg))"
-            }
+            return ProfileTarget.words.first { $0.word == arg }?.title ?? "Profile: \(profileName(arg))"
         case .host:
             switch arg {
             case "next": return "Next host"
@@ -136,6 +134,7 @@ enum ActionKind: String, CaseIterable, Identifiable {
         case .type: return "Type “\(arg)”"
         case .buzz: return "Buzz: \(arg)"
         case .apps: return arg == "previous" ? "Previous app" : "Next app"
+        case .mouse where arg == "point": return ProfileAction.pointTitle
         case .mouse, .custom: return action
         }
     }
@@ -197,7 +196,7 @@ struct ActionEditor: View {
             Picker("Call", selection: argument) {
                 ForEach(CallAction.allCases, id: \.self) { call in Text(call.title).tag(call.rawValue) }
             }
-            Text("On an iPhone that shares its notifications with the dongle (it asks once). A ringing call buzzes the band; with no call, a long buzz.")
+            Text("On an iPhone that shares its notifications with the dongle (it asks once), whichever host is active. A ringing call buzzes the band; with no call, a long buzz.")
                 .font(.caption).foregroundStyle(.secondary)
         case .buzz:
             Picker("Pattern", selection: argument) {
@@ -210,15 +209,18 @@ struct ActionEditor: View {
             }
             Text("Computers only. Best on flicks: keep pinching to browse apps, then release to choose. Requires firmware 0.15.0.").font(.caption).foregroundStyle(.secondary)
         case .mouse:
-            MouseEditor(argument: argument)
+            MouseEditor(argument: argument, allowsPoint: context.allowsPoint)
         case .profile:
+            let word = argument.wrappedValue
             Picker("Profile", selection: argument) {
-                Text("Next profile").tag("next")
-                Text("Previous profile").tag("previous")
+                ForEach(ProfileTarget.words, id: \.word) { target in Text(target.title).tag(target.word) }
                 ForEach(context.ids, id: \.self) { id in Text(id).tag(id) }
-                if !["next", "previous"].contains(argument.wrappedValue), !context.ids.contains(argument.wrappedValue) {
-                    Text("\(argument.wrappedValue) (missing)").tag(argument.wrappedValue)
+                if !ProfileFormat.reservedIDs.contains(word), !context.ids.contains(word) {
+                    Text("\(word) (missing)").tag(word)
                 }
+            }
+            if let detail = ProfileTarget.detail(word) {
+                Text(detail).font(.caption).foregroundStyle(.secondary)
             }
         case .host:
             Picker("Host", selection: argument) {
@@ -277,8 +279,10 @@ struct VerdictRow: View {
             switch parsed {
             case .hold where !context.allowsHold && context.allowsMenu:
                 return "hold: only works on middle.hold (it's released with the finger)"
-            case .hold where !context.allowsMenu, .menu where !context.allowsMenu:
-                return "The menu can't hold a key or open itself."
+            case .point where !context.allowsPoint && context.allowsMenu:
+                return "mouse:point only works on middle.hold (the pointer moves while it's held)"
+            case .hold where !context.allowsMenu, .point where !context.allowsMenu, .menu where !context.allowsMenu:
+                return "The menu can't hold a key, point or open itself."
             default:
                 return nil
             }
@@ -292,7 +296,9 @@ struct VerdictRow: View {
 
 struct MouseEditor: View {
     @Binding var argument: String
-    private static let known = ["click", "rightClick", "middleClick", "scrollUp", "scrollDown"] + (4...8).map { "button\($0)" }
+    /// `mouse:point` is offered (middle.hold only).
+    var allowsPoint = false
+    private static let known = ["click", "rightClick", "middleClick", "scrollUp", "scrollDown", "point"] + (4...8).map { "button\($0)" }
 
     private var parts: (what: String, steps: Int?) {
         let split = argument.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
@@ -308,7 +314,12 @@ struct MouseEditor: View {
             ForEach(4...8, id: \.self) { n in Text("Button \(n)").tag("button\(n)") }
             Text("Scroll up").tag("scrollUp")
             Text("Scroll down").tag("scrollDown")
+            if allowsPoint || parts.what == "point" { Text(ProfileAction.pointTitle).tag("point") }
             if !Self.known.contains(parts.what) { Text(parts.what).tag(parts.what) }
+        }
+        if parts.what == "point" {
+            Text("The wrist moves the pointer while the finger is held (turn the forearm), and stops when it lets go; index taps in the next 3 s click where it stopped. Computers, and an iPhone with AssistiveTouch on. Firmware 0.17.")
+                .font(.caption).foregroundStyle(.secondary)
         }
         if parts.what.hasPrefix("button") {
             Text("On an iPhone, give it an action in Settings › Accessibility › Touch › AssistiveTouch › Devices: press the gesture when it asks for the button. On a computer, 4 is back and 5 forward.")

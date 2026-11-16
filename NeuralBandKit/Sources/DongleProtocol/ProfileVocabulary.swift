@@ -42,7 +42,7 @@ extension ProfileGesture {
         case .indexTap, .indexDoubleTap, .indexTripleTap: "Tap the index finger to the thumb. A single tap waits 0.4 s only if the double tap is bound too."
         case .middleTap, .middleDoubleTap, .middleTripleTap: "Tap the middle finger to the thumb."
         case .indexHold: "Pinch, hold a moment and let go without turning. Usually menu."
-        case .middleHold: "Hold the middle finger to the thumb. A hold: chord stays pressed until you let go; anything else happens at the start."
+        case .middleHold: "Hold the middle finger to the thumb. A hold: chord stays pressed until you let go, and mouse:point moves the pointer until then; anything else happens at the start."
         case .swipeUp, .swipeDown, .swipeLeft, .swipeRight: "Swipe the thumb along the side of the index finger."
         case .dialCW, .dialCCW: "Pinch and turn the wrist: one step per 9° detent (mirrored on the left wrist)."
         default: rawValue.hasPrefix("flick.") ? "Pinch, hold and flick the wrist. Repeat during the hold. Firmware 0.15.0. Air mouse takes priority on computers." : "Raw band event, alongside named gestures. Firmware 0.15.0. Discover events in Gesture lab."
@@ -51,6 +51,32 @@ extension ProfileGesture {
 
     /// `hold:` works here only.
     public var allowsHold: Bool { self == .middleHold }
+    /// `mouse:point` works here only.
+    public var allowsPoint: Bool { self == .middleHold }
+}
+
+extension ProfileTarget {
+    /// The `profile:` words that aren't profile ids (`ProfileFormat.reservedIDs`), with their titles.
+    public static let words: [(word: String, title: String)] = [
+        ("next", "Next profile"), ("previous", "Previous profile"),
+        ("back", "Back"), ("home", "Home"), ("app", "Up into the app's mode"),
+    ]
+
+    /// What `profile:back`, `home` and `app` do, for pickers.
+    public static func detail(_ word: String) -> String? {
+        switch word {
+        case "back": "Down to the profile this one was entered from. Home if there is none; at home, home's buzz again."
+        case "home": "Straight to this host's start profile, whatever was entered on the way."
+        case "app": "Up into the profile that lists the computer's app in front (its apps). Computers with np-appwatch."
+        case "next", "previous": "Sideways, on the same level, skipping profiles this host can't use."
+        default: nil
+        }
+    }
+}
+
+extension ProfileAction {
+    /// `mouse:point` in pickers and lists.
+    public static let pointTitle = "Air mouse while held"
 }
 
 extension ProfileHosts {
@@ -113,13 +139,16 @@ extension ProfileFormat {
         ("media:voice", "Dictation on a Mac, Siri on an iPhone"),
         ("phoneMute", "A headset's phone-mute button (phones)"),
         ("call:answer · call:end", "Answer the ringing call; decline it, or hang up (an iPhone sharing its notifications with the dongle). A ringing call buzzes the band"),
+        ("call:toggle", "One gesture for both: answers a ringing call, else hangs up the one in progress. Works whichever host is active. Firmware 0.17"),
         ("key:<chord>", "A key with modifiers, pressed and released (computers, TVs): key:enter, key:cmd+shift+m, key:f5, key:]"),
         ("hold:<chord>", "Held while middle.hold lasts (push-to-talk), released with the finger or after 60 s"),
         ("type:<text>", "Types 1–64 printable ASCII characters (US layout)"),
         ("mouse:click · rightClick · middleClick", "Mouse buttons (computers; an iPhone with AssistiveTouch on)"),
         ("mouse:button4 … button8", "Extra mouse buttons. A computer: 4 back, 5 forward. An iPhone: AssistiveTouch gives each one an action, like Home, App Switcher, Control Center, Screenshot or a Shortcut. Firmware 0.16"),
         ("mouse:scrollUp · scrollDown, optionally :<1–20>", "Wheel steps (default 4)"),
-        ("profile:<id> · profile:next · profile:previous", "Switch this host's profile"),
+        ("mouse:point", "middle.hold only: the air mouse while the finger is held (turn the forearm to move it). Index taps in the next 3 s click where it stopped. Computers; an iPhone with AssistiveTouch on. Firmware 0.17"),
+        ("profile:<id> · profile:next · profile:previous", "Switch this host's profile. To an id goes up a level (back remembers where from); next and previous move sideways, skipping profiles it can't use"),
+        ("profile:back · profile:home · profile:app", "Modes (firmware 0.17): back down to where this profile was entered from (home if none; at home, home's buzz again); straight home (the start profile); up into the profile listing the computer's app in front"),
         ("host:next · host:previous · host:<kind>", "Send gestures to another connected host"),
         ("menu", "The letter menu: write one letter next"),
         ("write · write:<3–60>", "Handwriting on (two buzzes), typed on the computer; off (one buzz) after 10 s, or the given seconds, with nothing written. Again while on: off now"),
@@ -134,8 +163,8 @@ extension ProfileFormat {
         This is an np-profiles file (version 1): gesture profiles for a Meta Neural Band remote dongle. Edit it as I ask and reply with the whole file as one JSON code block.
 
         Rules:
-        - Top level: "format": "np-profiles", "version": 1, optional "name" (≤ 40 characters), optional "menu" (one letter a–z or digit 0–9 → an action other than hold: and menu), optional "start" ({"phone"|"computer"|"tv": profile id}; the profile must allow that kind), "profiles": 1–12 profiles.
-        - A profile: "id" (1–16 of a–z, 0–9, -; unique), "name" (1–24 characters), optional "buzz" (1–4 or a pattern name), "hosts" (any of phone, computer, mac, windows, linux, tv; default everyone), "typing" (handwriting is typed on computers), "pointer" (pinch-hold and move the wrist moves the mouse on computers, and on an iPhone with AssistiveTouch on (firmware 0.16); the dial and flicks are off there), "gestures" (gesture → action), "apps" (up to 16 Mac bundle ids, like com.google.Chrome: a computer whose helper reports one of them in front switches to this profile; each app in one profile only). Optional app fields: "description", "symbol" (an SF Symbol name), "color" ("#rrggbb").
+        - Top level: "format": "np-profiles", "version": 1, optional "name" (≤ 40 characters), optional "menu" (one letter a–z or digit 0–9 → an action other than hold:, mouse:point and menu), optional "start" ({"phone"|"computer"|"tv": profile id}; the profile must allow that kind; it's also that host's home), optional "everywhere" (gesture → action, like a profile's "gestures": in every profile, winning over the profile's own for the host kinds it covers; e.g. "flick.down": "profile:back"), "profiles": 1–12 profiles.
+        - A profile: "id" (1–16 of a–z, 0–9, -; unique; not next, previous, back, home or app), "name" (1–24 characters), optional "buzz" (1–4 or a pattern name), "hosts" (any of phone, computer, mac, windows, linux, tv; default everyone), "typing" (handwriting is typed on computers), "pointer" (pinch-hold and move the wrist moves the mouse on computers, and on an iPhone with AssistiveTouch on (firmware 0.16); the dial and flicks are off there), "gestures" (gesture → action), "apps" (up to 16 Mac bundle ids, like com.google.Chrome: a computer whose helper reports one of them in front switches to this profile; each app in one profile only). Optional app fields: "description", "symbol" (an SF Symbol name), "color" ("#rrggbb").
         - A gesture maps to one action string, or to an object by host kind: {"phone": …, "computer": …, "mac": …, "windows": …, "linux": …, "tv": …, "default": …}. The most specific kind wins (mac beats computer), then default.
         - At most \(maxBytes) bytes minified. Windows and Linux get cmd as Ctrl, so key:cmd+c copies everywhere.
 

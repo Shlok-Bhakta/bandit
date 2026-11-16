@@ -96,6 +96,50 @@ enum ProfileVectors {
         #expect(set.startProfile(for: .linux) == "desk")
         #expect(set.menu["5"] == .type("hello"))
     }
+
+    /// np-profiles' `modes_everywhere_bindings_win_for_the_kinds_they_cover`.
+    @Test func modesEverywhereBindingsWinForTheKindsTheyCover() throws {
+        let data = try #require(try ProfileVectors.files("valid").first { $0.name == "modes.json" }?.data)
+        let set = try ProfileFormat.check(data)
+        let (home, copilot) = (set.profiles[0], set.profiles[1])
+        for profile in [home, copilot] {
+            #expect(profile.action(.flickDown, for: .mac) == .profile(.back))
+            #expect(profile.action(.middleTripleTap, for: .phone) == .call(.toggle))
+            #expect(profile.action(.flickUp, for: .mac) == .profile(.app))
+        }
+        // Everywhere's flick.up is for computers: the phone keeps home's own.
+        #expect(home.action(.flickUp, for: .phone) == .click(.button7))
+        #expect(home.action(.flickDown, for: .phone) == .profile(.back), "everywhere beats home's own")
+        #expect(home.action(.middleHold, for: .mac) == .point)
+        #expect(copilot.action(.middleDoubleTap, for: .mac) == .profile(.previous))
+        #expect(set.menu["h"] == .profile(.home))
+        #expect(home.buzz == set.buzzes["home"])
+        #expect(set.everywhere.count == 3 && home.everywhere == set.everywhere)
+
+        // The app's own copy picks the same way, and keeps everywhere as everywhere.
+        let editable = try GestureProfileSet.decode(data)
+        #expect(editable.extra.members.isEmpty)
+        #expect(editable.everywhere["flick.up"] == .byHost(["computer": "profile:app"]))
+        #expect(editable.action(.flickUp, in: editable.profiles[0], for: .phone) == "mouse:button7")
+        #expect(editable.action(.flickUp, in: editable.profiles[0], for: .windows) == "profile:app")
+        #expect(editable.action(.flickDown, in: editable.profiles[0], for: .tv) == "profile:back")
+        #expect(editable.action(.swipeDown, in: editable.profiles[1], for: .mac) == "key:pagedown")
+        #expect(editable.validate() == nil)
+        let again = try GestureProfileSet.decode(editable.minifiedData)
+        #expect(again == editable)
+        #expect(try again.parsed() == set)
+        #expect(String(decoding: editable.minifiedData, as: UTF8.self).contains(#""everywhere":{"middle.tripleTap":"call:toggle","flick.up":{"computer":"profile:app"},"flick.down":"profile:back"},"profiles""#))
+    }
+
+    @Test func everywhereErrorsComeBeforeTheProfiles() throws {
+        let text = #"{"format":"np-profiles","version":1,"everywhere":{"index.tap":"mouse:point"},"profiles":[{"id":"home","name":"H"}]}"#
+        #expect(ProfileFormat.validate(Data(text.utf8)) == ProfileError("everywhere.index.tap", "mouse:point only works on middle.hold (the pointer moves while it's held)"))
+        let none = #"{"format":"np-profiles","version":1,"everywhere":{"flick.up":"none"},"profiles":[{"id":"a","name":"A","gestures":{"flick.up":"media:mute"}}]}"#
+        let set = try ProfileFormat.check(Data(none.utf8))
+        #expect(set.profiles[0].action(.flickUp, for: .mac) == .media(.mute), "a none everywhere covers nothing")
+        let wrongType = #"{"format":"np-profiles","version":1,"everywhere":["flick.up"],"profiles":[{"id":"a","name":"A"}]}"#
+        #expect(ProfileFormat.validate(Data(wrongType.utf8))?.path == "")
+    }
 }
 
 @Suite struct ProfileCheckerTests {
@@ -153,11 +197,29 @@ enum ProfileVectors {
         #expect(try parse("type:a:b") == .type("a:b"))
         #expect(try parse("profile:b") == .profile(.id("b")))
         #expect(try parse("host:tv") == .host(.kind(.tv)))
-        for bad in ["mouse:click:3", "mouse:button3", "mouse:button9", "mouse:button4:2", "mouse:scrollUp:21", "type:", "type:héllo", "profile:c", "host:fridge", "media:loud", "Menu", "menu:x"] {
+        #expect(try parse("profile:back") == .profile(.back))
+        #expect(try parse("profile:home") == .profile(.home))
+        #expect(try parse("profile:app") == .profile(.app))
+        #expect(try parse("call:toggle") == .call(.toggle))
+        #expect(try parse("mouse:point") == .point)
+        #expect(throws: ProfileError("x", "unknown call action \"hold\" (call:answer, call:end, call:toggle)")) { try parse("call:hold") }
+        #expect(throws: ProfileError("x", "unknown mouse action \"wave\" (click, rightClick, middleClick, button4–button8, scrollUp[:n], scrollDown[:n], point)")) { try parse("mouse:wave") }
+        for bad in ["mouse:point:2", "profile:up", "mouse:click:3", "mouse:button3", "mouse:button9", "mouse:button4:2", "mouse:scrollUp:21", "type:", "type:héllo", "profile:c", "host:fridge", "media:loud", "Menu", "menu:x"] {
             #expect(throws: ProfileError.self, "\(bad)") { try parse(bad) }
         }
         let error = try #require(ProfileFormat.validate(Data(#"{"format":"np-profiles","version":1,"profiles":[{"id":"a","name":"A","gestures":{"swipe.up":7}}]}"#.utf8)))
         #expect(error.path == "profiles[0].gestures.swipe.up")
+    }
+
+    @Test func modesMessagesMatchTheDongles() throws {
+        let menu = #"{"format":"np-profiles","version":1,"menu":{"p":"mouse:point"},"profiles":[{"id":"a","name":"A"}]}"#
+        #expect(ProfileFormat.validate(Data(menu.utf8)) == ProfileError("menu.p", "the menu can't hold a key, point or open itself"))
+        for id in ProfileFormat.reservedIDs {
+            let text = "{\"format\":\"np-profiles\",\"version\":1,\"profiles\":[{\"id\":\"\(id)\",\"name\":\"X\"}]}"
+            #expect(ProfileFormat.validate(Data(text.utf8)) == ProfileError("profiles[0].id", "\"\(id)\" means something else in profile:… actions: pick another id"))
+        }
+        let tap = #"{"format":"np-profiles","version":1,"profiles":[{"id":"a","name":"A","gestures":{"middle.hold":{"phone":"mouse:point","default":"media:voice"},"index.tap":"mouse:point"}}]}"#
+        #expect(ProfileFormat.validate(Data(tap.utf8)) == ProfileError("profiles[0].gestures.index.tap", "mouse:point only works on middle.hold (the pointer moves while it's held)"))
     }
 
     @Test func typeErrorsAreTheWholeFile() throws {
@@ -247,6 +309,7 @@ enum ProfileVectors {
         #expect(set.unusedID("Media") == "media-2")
         #expect(set.unusedID("My Set!") == "myset")
         #expect(set.unusedID("") == "custom")
+        #expect(set.unusedID("Home") == "home-2")
     }
 
     @Test func extractsJSONFromPastedAnswers() {

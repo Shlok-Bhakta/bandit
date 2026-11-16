@@ -127,7 +127,8 @@ final class ProfileStore {
         set.profiles.insert(original.copy(id: set.unusedID(original.id), name: name), at: index + 1)
     }
 
-    /// Removes a profile and whatever pointed at it (menu letters, start entries, `profile:<id>`).
+    /// Removes a profile and whatever pointed at it (menu letters, start entries, `profile:<id>`,
+    /// in profiles and everywhere).
     func delete(at offsets: IndexSet) {
         let removed = offsets.map { set.profiles[$0].id }
         var next = set
@@ -140,6 +141,9 @@ final class ProfileStore {
                     let fixed = Self.dropping("profile:\(id)", from: binding)
                     next.profiles[p].gestures[gesture] = fixed
                 }
+            }
+            for (gesture, binding) in next.everywhere {
+                next.everywhere[gesture] = Self.dropping("profile:\(id)", from: binding)
             }
         }
         set = next
@@ -160,14 +164,16 @@ final class ProfileStore {
         for p in next.profiles.indices where next.profiles[p].id == old { next.profiles[p].id = new }
         next.menu = next.menu.mapValues { $0 == "profile:\(old)" ? "profile:\(new)" : $0 }
         next.start = next.start.mapValues { $0 == old ? new : $0 }
-        for p in next.profiles.indices {
-            next.profiles[p].gestures = next.profiles[p].gestures.mapValues { binding in
-                switch binding {
-                case .action(let text): .action(text == "profile:\(old)" ? "profile:\(new)" : text)
-                case .byHost(let map): .byHost(map.mapValues { $0 == "profile:\(old)" ? "profile:\(new)" : $0 })
-                }
+        let renamed = { (binding: GestureBinding) -> GestureBinding in
+            switch binding {
+            case .action(let text): .action(text == "profile:\(old)" ? "profile:\(new)" : text)
+            case .byHost(let map): .byHost(map.mapValues { $0 == "profile:\(old)" ? "profile:\(new)" : $0 })
             }
         }
+        for p in next.profiles.indices {
+            next.profiles[p].gestures = next.profiles[p].gestures.mapValues(renamed)
+        }
+        next.everywhere = next.everywhere.mapValues(renamed)
         set = next
     }
 
