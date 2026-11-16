@@ -31,6 +31,17 @@ struct ProfileEditorView: View {
         }
     }
 
+    /// The dongle's version of this profile, when the phone has edits it doesn't (nil: the same,
+    /// unknown, or new here).
+    private var dongleVersion: GestureProfile? {
+        guard model.syncState == .phoneAhead, let theirs = model.dongleSet?.profile(id: profile.wrappedValue.id), theirs != profile.wrappedValue else { return nil }
+        return theirs
+    }
+
+    private var isNew: Bool {
+        model.syncState == .phoneAhead && model.dongleSet.map { $0.profile(id: profile.wrappedValue.id) == nil } == true
+    }
+
     private func problem(_ index: Int) -> ProfileError? {
         guard let error = store.validation, error.path == "profiles[\(index)]" || error.path.hasPrefix("profiles[\(index)].") else { return nil }
         return error
@@ -38,7 +49,13 @@ struct ProfileEditorView: View {
 
     private func form(_ index: Int) -> some View {
         let profile = profile
+        let dongle = dongleVersion
         return Form {
+            Section {
+                header(profile, edited: dongle != nil)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+            }
             if let error = problem(index) {
                 Section {
                     Label("The dongle would refuse this", systemImage: "exclamationmark.triangle.fill").foregroundStyle(Theme.danger)
@@ -52,7 +69,8 @@ struct ProfileEditorView: View {
                             BindingEditorView(target: .profile(uid), gesture: gesture)
                         } label: {
                             GestureRow(gesture: gesture, binding: profile.wrappedValue[gesture], everywhere: store.set.everywhere[gesture.rawValue],
-                                       broken: problem(index)?.path.hasPrefix("profiles[\(index)].gestures.\(gesture.rawValue)") == true)
+                                       broken: problem(index)?.path.hasPrefix("profiles[\(index)].gestures.\(gesture.rawValue)") == true,
+                                       edited: dongle.map { $0[gesture] != profile.wrappedValue[gesture] } ?? false)
                         }
                     }
                 }
@@ -63,17 +81,14 @@ struct ProfileEditorView: View {
                         BindingEditorView(target: .profile(uid), gesture: gesture)
                     } label: {
                         GestureRow(gesture: gesture, binding: profile.wrappedValue[gesture], everywhere: store.set.everywhere[gesture.rawValue],
-                                   broken: problem(index)?.path.hasPrefix("profiles[\(index)].gestures.\(gesture.rawValue)") == true)
+                                   broken: problem(index)?.path.hasPrefix("profiles[\(index)].gestures.\(gesture.rawValue)") == true,
+                                   edited: dongle.map { $0[gesture] != profile.wrappedValue[gesture] } ?? false)
                     }
                 }
                 NavigationLink { BandEventsView(target: .profile(uid)) } label: { Label("Bind a band event…", systemImage: "plus.circle") }
                 FirmwareFeatureNote()
             } header: { Text("Band events (experimental)") }
             Section {
-                TextField("Name", text: profile.name)
-                if profile.wrappedValue.name.unicodeScalars.count > 24 {
-                    Text("At most 24 characters.").font(.caption).foregroundStyle(Theme.danger)
-                }
                 HStack {
                     Text("ID").foregroundStyle(.secondary)
                     TextField("id", text: $draftID)
@@ -93,9 +108,8 @@ struct ProfileEditorView: View {
             } footer: {
                 Text("The id is what menu letters and profile: actions use (1–16 of a–z, 0–9 and -, but not next, previous, back, home or app). Renaming it updates them.")
             }
-            Section("Look") {
+            Section("Icon") {
                 SymbolPicker(symbol: optional(profile.symbol), tint: profile.wrappedValue.tint)
-                ColorSwatches(color: profile.color)
             }
             Section {
                 Picker("Switch buzz", selection: Binding(get: { profile.wrappedValue.buzzName.map { "pattern:" + $0 } ?? "count:\(profile.wrappedValue.buzz ?? 1)" }, set: { value in
@@ -126,6 +140,24 @@ struct ProfileEditorView: View {
         .screenBackground()
         .navigationTitle(profile.wrappedValue.name.isEmpty ? "Profile" : profile.wrappedValue.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    if let dongle {
+                        Button { withAnimation { revert(to: dongle) } } label: { Label("Revert to the dongle's version", systemImage: "arrow.uturn.backward") }
+                    }
+                    if model.syncState == .onDongle, model.link.isReady {
+                        Button { model.switchProfile(profile.wrappedValue.id) } label: { Label("Use on the active device", systemImage: "hand.point.right") }
+                    }
+                    Button { store.duplicate(index) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+                        .disabled(store.set.profiles.count >= ProfileFormat.maxProfiles)
+                    Button(role: .destructive) { confirmDelete = true } label: { Label("Delete profile", systemImage: "trash") }
+                        .disabled(store.set.profiles.count <= 1)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
+        }
         .onDisappear { commitID() }
         .confirmationDialog("Delete “\(profile.wrappedValue.name)”?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
@@ -135,6 +167,41 @@ struct ProfileEditorView: View {
         } message: {
             Text("Menu letters, start entries and actions that switch to it are removed too.")
         }
+    }
+
+    private func header(_ profile: Binding<GestureProfile>, edited: Bool) -> some View {
+        let tint = profile.wrappedValue.tint
+        return GlowCard(tint: tint, cornerRadius: 22) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 14) {
+                    SymbolTile(symbol: profile.wrappedValue.displaySymbol, tint: tint, size: 56)
+                        .symbolEffect(.bounce, value: profile.wrappedValue.displaySymbol)
+                    VStack(alignment: .leading, spacing: 4) {
+                        TextField("Name", text: profile.name)
+                            .font(.system(.title2, design: .rounded, weight: .bold))
+                            .submitLabel(.done)
+                        HStack(spacing: 6) {
+                            Text(profile.wrappedValue.id).font(.caption.monospaced()).foregroundStyle(.white.opacity(0.6))
+                            if edited { Text("EDITED").badgeStyle(.white) }
+                            if isNew { Text("NEW").badgeStyle(.white) }
+                        }
+                    }
+                }
+                if profile.wrappedValue.name.unicodeScalars.count > 24 {
+                    Text("At most 24 characters.").font(.caption).foregroundStyle(Theme.danger)
+                }
+                ColorSwatches(color: profile.color)
+            }
+            .padding(16)
+        }
+        .padding(.vertical, 4)
+        .animation(.easeInOut(duration: 0.3), value: profile.wrappedValue.color)
+    }
+
+    /// This profile as the dongle has it, keeping the id it has here.
+    private func revert(to dongle: GestureProfile) {
+        store.revert(.profile(dongle.id), to: model.dongleSet ?? store.set)
+        draftID = dongle.id
     }
 
     @ViewBuilder
@@ -220,10 +287,12 @@ struct GestureRow: View {
     /// The set's `everywhere` binding for this gesture, which wins over a profile's own.
     var everywhere: GestureBinding? = nil
     var broken = false
+    /// Differs from the dongle's.
+    var edited = false
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: gesture.symbol).foregroundStyle(gesture.tint).frame(width: 26)
+            SymbolTile(symbol: gesture.symbol, tint: binding == nil && everywhere == nil ? Color(white: 0.28) : gesture.tint, size: 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text(gesture.title)
                     .font(gesture.group == .band ? .callout.monospaced() : .body)
@@ -240,6 +309,9 @@ struct GestureRow: View {
             }
             Spacer()
             if broken { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.danger) }
+            if edited {
+                Circle().fill(Theme.accent).frame(width: 8, height: 8).accessibilityLabel("Edited")
+            }
         }
     }
 
@@ -428,19 +500,25 @@ struct ColorSwatches: View {
     @Binding var color: String?
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 0) {
             ForEach(Theme.profileColors, id: \.hex) { swatch in
                 Button { color = color == swatch.hex ? nil : swatch.hex } label: {
                     Circle()
                         .fill(Theme.color(hex: swatch.hex) ?? Theme.accent)
                         .frame(width: 28, height: 28)
-                        .overlay(Circle().stroke(.white, lineWidth: color == swatch.hex ? 2.5 : 0))
+                        .overlay(Circle().strokeBorder(.white, lineWidth: color == swatch.hex ? 2.5 : 0))
+                        .overlay { if color == swatch.hex { Image(systemName: "checkmark").font(.caption2.weight(.heavy)).foregroundStyle(.white) } }
+                        .scaleEffect(color == swatch.hex ? 1.12 : 1)
+                        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: color)
                 }
                 .buttonStyle(.plain)
+                .frame(maxWidth: .infinity)
                 .accessibilityLabel(swatch.name)
+                .accessibilityAddTraits(color == swatch.hex ? .isSelected : [])
             }
         }
         .padding(.vertical, 4)
+        .sensoryFeedback(.selection, trigger: color)
     }
 }
 

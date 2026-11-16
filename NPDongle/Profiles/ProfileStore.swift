@@ -39,18 +39,79 @@ final class ProfileStore {
 
     @ObservationIgnored private var saveTask: Task<Void, Never>?
 
-    /// The phone's set as taken from the dongle: (the dongle's hash, the phone's), so the two count
-    /// as the same set until either changes.
-    private(set) var dongleCopy: (dongle: String, phone: String)? {
+    /// The set the dongle was last seen running, with the dongle's hash for it (`ph`): what the
+    /// phone's edits are compared with, and the common version when the two need merging.
+    struct Synced {
+        let set: GestureProfileSet
+        let hash: String
+    }
+
+    private(set) var synced: Synced? {
         didSet {
-            UserDefaults.standard.set(dongleCopy.map { "\($0.dongle) \($0.phone)" }, forKey: Self.dongleCopyKey)
+            syncedSha8 = synced?.set.sha8
+            saveSynced()
         }
     }
+    private var syncedSha8: String?
+    private static let syncedHashKey = "profiles.syncedHash"
+    /// Before build 15: (the dongle's hash, the phone's) for a set taken from the dongle.
     private static let dongleCopyKey = "profiles.dongleCopy"
 
     /// Whether the dongle's set (status `ph`) is this phone's.
     func isOnDongle(_ hash: String) -> Bool {
-        hash == sha8 || (hash == ProfileFormat.builtinHash && isBuiltin) || (dongleCopy?.dongle == hash && dongleCopy?.phone == sha8)
+        hash == sha8 || (hash == ProfileFormat.builtinHash && isBuiltin) || (synced?.hash == hash && syncedSha8 == sha8)
+    }
+
+    /// The dongle's set when the app knows it: the built-in one, or the one last synced.
+    func dongleSet(hash: String) -> GestureProfileSet? {
+        if isOnDongle(hash) { return set }
+        if hash == ProfileFormat.builtinHash { return .builtin }
+        return synced?.hash == hash ? synced?.set : nil
+    }
+
+    /// The status says the dongle runs this phone's set: remember it as the synced version.
+    func noteDongle(hash: String) {
+        guard isOnDongle(hash), synced?.hash != hash || syncedSha8 != sha8 else { return }
+        synced = Synced(set: set, hash: hash)
+    }
+
+    /// The dongle took (or sent) `set`, which it hashes as `hash`.
+    func markSynced(_ set: GestureProfileSet, hash: String) {
+        synced = Synced(set: set, hash: hash)
+    }
+
+    /// Whether the phone's set is still the one last synced (nothing edited since).
+    var unchangedSinceSync: Bool { syncedSha8 == sha8 }
+
+    private static var syncedURL: URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return support.appendingPathComponent("synced.\(ProfileFormat.fileExtension)")
+    }
+
+    private func saveSynced() {
+        UserDefaults.standard.set(synced?.hash, forKey: Self.syncedHashKey)
+        UserDefaults.standard.removeObject(forKey: Self.dongleCopyKey)
+        do {
+            if let synced {
+                try FileManager.default.createDirectory(at: Self.syncedURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try synced.set.prettyData.write(to: Self.syncedURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            } else {
+                try? FileManager.default.removeItem(at: Self.syncedURL)
+            }
+        } catch {
+            logWarning(.dongle, "Profiles: couldn't keep the synced copy: \(BandLog.describe(error))")
+        }
+    }
+
+    private static func loadSynced(current: GestureProfileSet) -> Synced? {
+        if let hash = UserDefaults.standard.string(forKey: syncedHashKey),
+           let data = try? Data(contentsOf: syncedURL), let set = try? GestureProfileSet.decode(data) {
+            return Synced(set: set, hash: hash)
+        }
+        // Older builds kept only the hashes of a set taken from the dongle.
+        let copy = UserDefaults.standard.string(forKey: dongleCopyKey)?.split(separator: " ").map(String.init)
+        if let copy, copy.count == 2, copy[1] == current.sha8 { return Synced(set: current, hash: copy[0]) }
+        return nil
     }
 
     static var fileURL: URL {
@@ -70,8 +131,9 @@ final class ProfileStore {
         }
         set = loaded
         refresh()
-        let copy = UserDefaults.standard.string(forKey: Self.dongleCopyKey)?.split(separator: " ").map(String.init)
-        if let copy, copy.count == 2 { dongleCopy = (copy[0], copy[1]) }
+        let synced = Self.loadSynced(current: loaded)
+        self.synced = synced
+        syncedSha8 = synced?.set.sha8
     }
 
     private func refresh() {
@@ -177,6 +239,27 @@ final class ProfileStore {
         set = next
     }
 
+    // MARK: changes against the dongle
+
+    /// Puts one part back as `dongle` has it.
+    func revert(_ part: ProfileSetPart, to dongle: GestureProfileSet) {
+        set = set.replacing(part, from: dongle)
+    }
+
+    /// Drops every edit since `dongle`, keeping the app's identities for profiles both have.
+    func discardChanges(to dongle: GestureProfileSet) {
+        set = set.differences(from: dongle).reduce(set) { $0.replacing($1, from: dongle) }
+        logNotice(.dongle, "Profiles: discarded the phone's changes")
+    }
+
+    /// Takes a merged set in, `dongle` being the dongle's own when it came from there.
+    func applyMerge(_ merged: GestureProfileSet, dongle: (set: GestureProfileSet, hash: String)?) {
+        set = merged
+        save()
+        if let dongle { markSynced(dongle.set, hash: dongle.hash) }
+        logNotice(.dongle, "Profiles: merged (\(merged.profiles.count) profiles)")
+    }
+
     // MARK: import
 
     /// Reads a file or pasted text without applying it.
@@ -215,7 +298,7 @@ final class ProfileStore {
         guard let imported = candidate.set else { return }
         set = imported
         save()
-        dongleCopy = candidate.dongleHash.map { ($0, sha8) }
+        if let hash = candidate.dongleHash { markSynced(imported, hash: hash) }
         logNotice(.dongle, "Profiles: imported \(candidate.source) (\(imported.profiles.count) profiles, \(candidate.error == nil ? "valid" : "with problems"))")
     }
 }

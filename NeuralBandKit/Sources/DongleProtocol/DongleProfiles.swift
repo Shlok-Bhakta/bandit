@@ -942,7 +942,7 @@ public struct GestureProfileSet: Equatable, Sendable {
 
 public struct GestureProfile: Equatable, Sendable {
     /// The app's handle for lists; not in the file.
-    public let uid: UUID
+    public internal(set) var uid: UUID
     public var id: String
     public var name: String
     /// 1–4; nil: not written (the dongle's default, 1).

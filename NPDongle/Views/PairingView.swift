@@ -119,7 +119,7 @@ struct PairingView: View {
             } header: {
                 Text("On the \(kind.label)")
             } footer: {
-                Text("Once it's connected it shows up under Hosts on the Dongle tab. Close the window when you're done, so nothing else can pair.")
+                Text("Once it's connected it shows up under Devices on the Dongle tab. Close the window when you're done, so nothing else can pair.")
             }
             Section {
                 Button(role: .destructive) {

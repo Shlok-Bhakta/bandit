@@ -11,16 +11,30 @@ struct SettingsView: View {
 
     var body: some View {
         List {
+            AppearanceSection()
+            Section("Dongle") {
+                NavigationLink { FirmwareView() } label: {
+                    LabeledContent {
+                        if model.updater.updateAvailable, let release = model.updater.release {
+                            Text("\(release.version) available").badgeStyle(Theme.mint)
+                        } else if let status {
+                            Text(status.firmware).font(.callout.monospaced())
+                        }
+                    } label: {
+                        Label("Firmware", systemImage: "cpu")
+                    }
+                }
+                Button { model.sheet = .pairing } label: { Label("Pair a device", systemImage: "link.badge.plus") }
+                    .disabled(!link.isReady)
+                NavigationLink { LogsView() } label: { Label("Logs", systemImage: "text.alignleft") }
+                Button(role: .destructive) { confirmReboot = true } label: { Label("Restart the dongle", systemImage: "restart.circle") }
+                    .disabled(!link.isReady || model.updater.isBusy || model.uploader.isBusy)
+            }
             liveActivity
             if let status, link.isReady {
                 if let mouse = status.mouse { mouseSettings(mouse) }
                 band(status)
                 TestKeysSection(activeHost: status.activeHost)
-            }
-            Section("Dongle") {
-                NavigationLink { LogsView() } label: { Label("Logs", systemImage: "text.alignleft") }
-                Button(role: .destructive) { confirmReboot = true } label: { Label("Restart the dongle", systemImage: "restart.circle") }
-                    .disabled(!link.isReady || model.updater.isBusy || model.uploader.isBusy)
             }
             Section("About") {
                 InfoRow(label: "NP Dongle", value: DongleModel.version)
@@ -69,6 +83,15 @@ struct SettingsView: View {
 
     private func band(_ status: DongleStatus) -> some View {
         Section {
+            if let band = status.band {
+                InfoRow(label: "State", value: BandState.describe(band.state))
+                if let millivolts = band.millivolts, let milliamps = band.milliamps {
+                    // The band's own reading: negative current is charging.
+                    InfoRow(label: "Power", value: String(format: "%.2f V · %@", Double(millivolts) / 1000,
+                                                          milliamps < 0 ? "charging at \(-milliamps) mA" : "drawing \(milliamps) mA"))
+                }
+                if let hand = band.hand { InfoRow(label: "Hand", value: hand.capitalized) }
+            }
             if status.band?.state == "paused" {
                 Button { link.send(.bandResume) } label: { Label("Reclaim: the dongle takes the band back", systemImage: "play.circle") }
             } else {
@@ -166,5 +189,45 @@ struct LogsView: View {
                     .disabled(link.logLines.isEmpty)
             }
         }
+    }
+}
+
+/// The app's look: its accent, and whether the Dongle tab glows in the active profile's colour.
+struct AppearanceSection: View {
+    @AppStorage(Appearance.accentKey) private var accent = ""
+    @AppStorage(Appearance.glowKey) private var profileGlow = true
+
+    var body: some View {
+        Section {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    swatch(name: "Blue", hex: "", color: Theme.blue)
+                    ForEach(Theme.profileColors.dropFirst(), id: \.hex) { swatch(name: $0.name, hex: $0.hex, color: Theme.color(hex: $0.hex) ?? Theme.blue) }
+                }
+                .padding(.vertical, 6)
+            }
+            Toggle(isOn: $profileGlow) {
+                Label { Text("Glow in the profile's colour"); Text("The Dongle tab's card takes the active profile's colour").font(.caption) } icon: { Image(systemName: "sparkles") }
+            }
+        } header: {
+            Text("Appearance")
+        }
+    }
+
+    private func swatch(name: String, hex: String, color: Color) -> some View {
+        let selected = accent == hex
+        return Button { accent = hex } label: {
+            VStack(spacing: 6) {
+                Circle()
+                    .fill(LinearGradient(colors: [color, color.mix(with: .black, by: 0.3)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(width: 40, height: 40)
+                    .overlay(Circle().strokeBorder(.white, lineWidth: selected ? 3 : 0))
+                    .shadow(color: color.opacity(selected ? 0.6 : 0), radius: 8)
+                Text(name).font(.caption2).foregroundStyle(selected ? .primary : .secondary)
+            }
+        }
+        .buttonStyle(PressableStyle())
+        .accessibilityLabel("\(name) accent")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

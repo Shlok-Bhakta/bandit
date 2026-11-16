@@ -42,7 +42,7 @@ final class DongleLink: NSObject, @preconcurrency CBCentralManagerDelegate, @pre
     static let logUUID = CBUUID(string: DongleGATT.log)
     static let updateUUID = CBUUID(string: DongleGATT.update)
     static let changedUUID = CBUUID(string: DongleGATT.changed)
-    static let pairingAdvice = "iOS couldn't pair with the dongle. Open Settings › Bluetooth and connect “\(DongleGATT.advertisedName)”, then come back. (The dongle only accepts a new device while its pairing window is open: open one from the Pair tab on a phone that's already paired, or plug the dongle in again: for 2 minutes after it starts, the next new device may pair.)"
+    static let pairingAdvice = "iOS couldn't pair with the dongle. Open Settings › Bluetooth and connect “\(DongleGATT.advertisedName)”, then come back. (The dongle only accepts a new device while its pairing window is open: open one with Add a device on a phone that's already paired, or plug the dongle in again: for 2 minutes after it starts, the next new device may pair.)"
     static let logCapacity = 2000
 
     private(set) var state: State = .idle {
@@ -82,6 +82,9 @@ final class DongleLink: NSObject, @preconcurrency CBCentralManagerDelegate, @pre
 
     /// The app is in the foreground: connect and poll Status every 1.5 s.
     func setActive(_ on: Bool) {
+        #if DEBUG
+        if simulated { return }
+        #endif
         guard on != visible else { return }
         visible = on
         if on {
@@ -176,6 +179,20 @@ final class DongleLink: NSObject, @preconcurrency CBCentralManagerDelegate, @pre
         }
         peripheral.writeValue(command.data, for: characteristic, type: .withResponse)
     }
+
+    #if DEBUG
+    /// Simulator layout checks (`-NPDemo YES`): a connected dongle with this status, no radio.
+    @ObservationIgnored private var simulated = false
+
+    func simulate(_ status: DongleStatus) {
+        simulated = true
+        peripheralName = DongleGATT.advertisedName
+        self.status = status
+        statusDate = Date()
+        state = .ready
+        onStatus?(status)
+    }
+    #endif
 
     func readStatus() {
         guard let peripheral, let characteristic = characteristics[Self.statusUUID], !readingStatus else { return }

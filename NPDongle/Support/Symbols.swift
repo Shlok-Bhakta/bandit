@@ -111,7 +111,10 @@ extension GestureProfile {
 
     static let builtinSymbols = ["media": "music.note", "slides": "play.rectangle", "write": "pencil.and.scribble",
                                  "copilot": "sparkles", "tv": "tv"]
-    var tint: Color { Theme.color(hex: color) ?? Theme.accent }
+    /// Its own colour, else one for the built-in ids, else the accent.
+    var tint: Color { Theme.color(hex: color ?? Self.builtinColors[id]) ?? Theme.accent }
+
+    static let builtinColors = ["media": "#ff616b", "slides": "#ffb840", "write": "#bf80ff", "copilot": "#4cc9f0", "tv": "#a6e05a"]
 
     /// "Everyone", or the kinds it's for.
     var hostsSummary: String {

@@ -32,6 +32,10 @@ final class ProfileUploader {
     @ObservationIgnored private var deadline: Date = .distantPast
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var successMessage = ""
+    /// The set being sent (nil for a reset).
+    @ObservationIgnored private var sendingSet: GestureProfileSet?
+    /// The dongle confirmed `set` under `hash`.
+    @ObservationIgnored var onSent: ((_ set: GestureProfileSet, _ hash: String) -> Void)?
 
     init(link: DongleLink) {
         self.link = link
@@ -64,6 +68,7 @@ final class ProfileUploader {
         guard let status = ready() else { return }
         do {
             let upload = try ProfileUpload(set.minifiedData)
+            sendingSet = set
             start(upload.commands, expecting: upload.sha8, status: status,
                   success: "“\(set.name ?? "Your set")” is on the dongle (\(upload.data.count) bytes, \(upload.sha8)).")
             logNotice(.dongle, "Profiles: sending \(upload.data.count) B as \(upload.commands.count) commands, sha \(upload.sha8)")
@@ -75,6 +80,7 @@ final class ProfileUploader {
     /// `profiles reset`: the dongle goes back to its built-in set.
     func resetDongle() {
         guard !isBusy, let status = ready() else { return }
+        sendingSet = nil
         start([.profilesReset], expecting: ProfileFormat.builtinHash, status: status, success: "The dongle uses its built-in profiles again.")
         logNotice(.dongle, "Profiles: resetting the dongle to the built-in set")
     }
@@ -90,7 +96,7 @@ final class ProfileUploader {
             return nil
         }
         guard status.supportsProfiles else {
-            phase = .failed("This dongle's firmware doesn't keep profiles yet. Update it on the Firmware tab, then try again.")
+            phase = .failed("This dongle's firmware doesn't keep profiles yet. Update it in Settings › Firmware, then try again.")
             return nil
         }
         return status
@@ -161,6 +167,7 @@ final class ProfileUploader {
         if status.profileHash == expectedHash {
             stopTimer()
             logNotice(.dongle, "Profiles: the dongle reports \(expectedHash)")
+            if let sendingSet { onSent?(sendingSet, expectedHash) }
             phase = .done(successMessage)
         } else if let error = status.profileError, error != errorBefore {
             fail("The dongle refused the set: \(error)")

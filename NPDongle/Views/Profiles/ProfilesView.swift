@@ -16,19 +16,21 @@ struct ProfilesView: View {
 
     var body: some View {
         @Bindable var store = model.store
+        let dongle = model.syncState == .phoneAhead ? model.dongleSet : nil
         List {
             Section {
-                TextField("Set name", text: Binding(get: { store.set.name ?? "" }, set: { store.set.name = $0.isEmpty ? nil : $0 }))
-                    .font(.headline)
-                SyncRow()
-                ValidationRow(error: store.validation, size: store.size)
-                if let error = store.saveError { Text(error).font(.footnote).foregroundStyle(Theme.danger) }
+                SetHeader()
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
             }
-            sendSection
             Section {
                 ForEach(store.set.profiles, id: \.uid) { profile in
                     NavigationLink(value: ProfileRoute.profile(profile.uid)) {
-                        ProfileRow(profile: profile, problem: problem(for: profile))
+                        ProfileRow(profile: profile, problem: problem(for: profile),
+                                   change: dongle.flatMap { dongle in
+                                       guard let theirs = dongle.profile(id: profile.id) else { return .added }
+                                       return theirs == profile ? nil : .edited
+                                   })
                     }
                     .contextMenu {
                         Button { duplicate(profile) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
@@ -78,6 +80,7 @@ struct ProfilesView: View {
             Section("Discover") {
                 NavigationLink { GestureLabView() } label: { Label("Gesture lab", systemImage: "waveform.path") }
             }
+            dongleSection
             fileSection
         }
         .darkList()
@@ -121,19 +124,10 @@ struct ProfilesView: View {
         return path == "profiles[\(index)]" || path.hasPrefix("profiles[\(index)].")
     }
 
-    // MARK: sending
+    // MARK: the dongle
 
-    private var sendSection: some View {
+    private var dongleSection: some View {
         Section {
-            Button { uploader.send(store.set) } label: {
-                HStack {
-                    Label(model.syncState == .onDongle ? "Send again" : "Send to the dongle", systemImage: "arrow.up.circle.fill")
-                    Spacer()
-                    if uploader.isBusy { ProgressView().controlSize(.small) }
-                }
-            }
-            .disabled(uploader.isBusy || store.validation != nil || !model.link.isReady || model.status?.supportsProfiles != true)
-            uploadProgress
             Button { model.downloader.start() } label: {
                 HStack {
                     Label("Get the dongle's set", systemImage: "arrow.down.circle")
@@ -143,30 +137,16 @@ struct ProfilesView: View {
             }
             .disabled(model.downloader.isBusy || uploader.isBusy || !model.link.isReady || model.status?.supportsProfiles != true)
             if let error = model.downloader.error { Text(error).font(.caption).foregroundStyle(Theme.danger) }
+            if model.syncState == .onDongle {
+                Button { model.sendProfiles() } label: { Label("Send again", systemImage: "arrow.up.circle") }
+                    .disabled(uploader.isBusy || store.validation != nil || !model.link.isReady)
+            }
             Button(role: .destructive) { confirmReset = true } label: { Label("Erase the dongle's set (back to built-in)", systemImage: "trash") }
                 .disabled(uploader.isBusy || !model.link.isReady || model.status?.profileHash == ProfileFormat.builtinHash || model.status?.supportsProfiles != true)
+        } header: {
+            Text("Dongle")
         } footer: {
-            Text("Edits save on this phone. Send to apply them on the dongle. Get copies the dongle’s current setup onto this phone.")
-        }
-    }
-
-    @ViewBuilder
-    private var uploadProgress: some View {
-        switch uploader.phase {
-        case .idle:
-            EmptyView()
-        case .sending:
-            ProgressView(value: uploader.progress) { Text("Sending…").font(.caption) }
-        case .confirming:
-            HStack { ProgressView().controlSize(.small); Text("Waiting for the dongle to save it…").font(.callout) }
-        case .done(let message):
-            Label(message, systemImage: "checkmark.seal.fill").font(.callout).foregroundStyle(Theme.mint)
-                .onTapGesture { uploader.dismiss() }
-        case .failed(let reason):
-            VStack(alignment: .leading, spacing: 4) {
-                Label(reason, systemImage: "exclamationmark.triangle.fill").font(.callout).foregroundStyle(Theme.danger)
-                Button("Dismiss") { uploader.dismiss() }.font(.footnote)
-            }
+            Text("Edits save on this iPhone as you make them; the bar at the bottom sends them to the dongle. Get brings the dongle's set here, merging it with yours when both changed.")
         }
     }
 
@@ -219,18 +199,17 @@ enum ProfileRoute: Hashable {
 struct ProfileRow: View {
     let profile: GestureProfile
     var problem = false
+    /// How it differs from the dongle's (nil: the same, or unknown).
+    var change: ChangeText.Kind? = nil
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: profile.displaySymbol)
-                .font(.title3)
-                .foregroundStyle(profile.tint)
-                .frame(width: 36, height: 36)
-                .background(profile.tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            SymbolTile(symbol: profile.displaySymbol, tint: profile.tint, size: 38)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(profile.name.isEmpty ? "Untitled" : profile.name).font(.headline)
                     if problem { Image(systemName: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(Theme.danger) }
+                    if let change { Text(change.label).badgeStyle(change.tint) }
                 }
                 Text("\(profile.id) · \(profile.hostsSummary) · \(profile.gestures.count) gestures")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -239,53 +218,52 @@ struct ProfileRow: View {
     }
 }
 
-/// The phone's set against the dongle's (status `ph`).
-struct SyncRow: View {
+/// The set: its name, whether the dongle has it, and whether the dongle would take it.
+struct SetHeader: View {
     @Environment(DongleModel.self) private var model
 
     var body: some View {
+        @Bindable var store = model.store
         let state = model.syncState
-        HStack {
-            Label(state.title, systemImage: state.symbol)
-                .foregroundStyle(state == .onDongle ? Theme.mint : state == .disconnected ? .secondary : Theme.warn)
-            Spacer()
-            Text(model.store.sha8).font(.caption.monospaced()).foregroundStyle(.secondary)
+        let tint: Color = switch state {
+        case .onDongle: Theme.mint
+        case .disconnected, .unsupported: .gray
+        case .phoneAhead, .dongleAhead: Theme.accent
+        case .diverged: Theme.warn
         }
-        .font(.callout)
-        if let hash = model.status?.profileHash, state == .different {
-            Text("The dongle's set (\(hash)) isn't this phone's (\(model.store.sha8)). If it was changed somewhere else, get it first: sending replaces it.")
-                .font(.caption).foregroundStyle(.secondary)
-            Button { model.downloader.start() } label: {
-                Label("Get the dongle's set onto this phone", systemImage: "arrow.down.circle.fill")
+        GlowCard(tint: store.validation == nil ? tint : Theme.danger, cornerRadius: 22) {
+            VStack(alignment: .leading, spacing: 12) {
+                TextField("Name this set", text: Binding(get: { store.set.name ?? "" }, set: { store.set.name = $0.isEmpty ? nil : $0 }))
+                    .font(.system(.title2, design: .rounded, weight: .bold))
+                    .submitLabel(.done)
+                HStack(spacing: 8) {
+                    Label(state.title, systemImage: state.symbol)
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(tint.opacity(0.45), in: Capsule())
+                        .foregroundStyle(.white)
+                        .contentTransition(.symbolEffect(.replace))
+                    Spacer()
+                    Text("\(store.set.profiles.count) profiles · \(store.size * 100 / ProfileFormat.maxBytes)% full")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.white.opacity(0.6))
+                }
+                ProgressView(value: Double(min(store.size, ProfileFormat.maxBytes)), total: Double(ProfileFormat.maxBytes))
+                    .tint(store.size > ProfileFormat.maxBytes * 9 / 10 ? Theme.warn : .white.opacity(0.7))
+                if let error = store.validation {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("The dongle would refuse this set", systemImage: "exclamationmark.triangle.fill")
+                            .font(.callout.weight(.semibold)).foregroundStyle(Theme.danger)
+                        ProblemText(error: error)
+                    }
+                }
+                if let error = model.status?.profileError {
+                    Label("Last upload refused: \(error)", systemImage: "xmark.octagon").font(.caption).foregroundStyle(Theme.danger)
+                }
+                if let error = store.saveError { Text(error).font(.footnote).foregroundStyle(Theme.danger) }
             }
-            .disabled(model.downloader.isBusy)
+            .padding(18)
         }
-        if let error = model.status?.profileError {
-            Label("Last upload refused: \(error)", systemImage: "xmark.octagon").font(.caption).foregroundStyle(Theme.danger)
-        }
-    }
-}
-
-/// The dongle's verdict on the set, with where the problem is.
-struct ValidationRow: View {
-    let error: ProfileError?
-    let size: Int
-
-    var body: some View {
-        if let error {
-            VStack(alignment: .leading, spacing: 4) {
-                Label("The dongle would refuse this set", systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout.weight(.semibold)).foregroundStyle(Theme.danger)
-                ProblemText(error: error)
-            }
-        } else {
-            HStack {
-                Label("Valid", systemImage: "checkmark.shield").foregroundStyle(Theme.mint)
-                Spacer()
-                Text("\(size) of \(ProfileFormat.maxBytes) bytes").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            }
-            .font(.callout)
-        }
+        .padding(.vertical, 4)
     }
 }
 

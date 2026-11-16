@@ -214,16 +214,23 @@ struct ImportReviewView: View {
                     ForEach(set.profiles, id: \.uid) { profile in ProfileRow(profile: profile) }
                 }
                 Section {
+                    NavigationLink {
+                        MergeView(request: DongleModel.MergeRequest(merge: ProfileMerge(base: nil, phone: model.store.set, other: set, prefer: .other),
+                                                                    source: candidate.source, dongleHash: candidate.dongleHash)) { dismiss() }
+                    } label: {
+                        Label("Merge with this iPhone's set…", systemImage: "arrow.triangle.merge")
+                    }
+                    .disabled(set.sameContent(as: model.store.set))
                     Button {
                         model.store.apply(candidate)
                         dismiss()
                     } label: {
-                        Label(candidate.error == nil ? "Replace this phone's set" : "Import anyway and fix it here", systemImage: "square.and.arrow.down")
+                        Label(candidate.error == nil ? "Replace this iPhone's set" : "Replace it anyway and fix it here", systemImage: "square.and.arrow.down")
                     }
                 } footer: {
                     Text(candidate.dongleHash != nil
                          ? "This replaces the set on this phone with the dongle's (export it first to keep it). The dongle already has it: no need to send."
-                         : "This replaces the set on this phone (export it first to keep it). The dongle changes only when you send.")
+                         : "Merge takes the parts you pick and keeps the rest of yours. Replace swaps the whole set on this iPhone (export it first to keep it). The dongle changes only when you send.")
                 }
             }
         }
