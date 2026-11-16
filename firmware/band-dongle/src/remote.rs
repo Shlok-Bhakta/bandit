@@ -926,6 +926,27 @@ impl Remote {
         sent.ok().map(|_| handle)
     }
 
+    /// Presses a media key and keeps it down on the active host (Siri listens while the voice
+    /// key is held on an iPhone), for [`Self::release_media`].
+    pub fn hold_media(&self, key: MediaKey) -> Option<u16> {
+        let _keys = self.0.keys.lock().unwrap();
+        let (handle, name) = {
+            let state = self.0.state.lock().unwrap();
+            let host = state.active.and_then(|active| state.hosts.iter().find(|host| host.handle == active))?;
+            (host.handle, host.name.clone())
+        };
+        let sent = self.0.consumer.lock().notify_with(&[1u8 << (key as u8)], handle);
+        info!("HOLD {key:?} on {name}: {sent:?}");
+        sent.ok().map(|_| handle)
+    }
+
+    /// Lets go of the media key held on `handle`.
+    pub fn release_media(&self, handle: u16) {
+        let _keys = self.0.keys.lock().unwrap();
+        let sent = self.0.consumer.lock().notify_with(&[0], handle);
+        info!("RELEASE media key on host {handle}: {sent:?}");
+    }
+
     /// One mouse report to the active host (every host's map has the mouse since 0.16): buttons
     /// held, a move and a wheel step. No release: the next report says what's held. Logged only when it fails.
     pub fn mouse(&self, buttons: u8, dx: i8, dy: i8, wheel: i8) -> bool {

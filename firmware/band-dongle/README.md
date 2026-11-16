@@ -133,6 +133,15 @@ and `tv`, which do what the modes below always did.
   Lowest free heap 63 → 137 KB, largest free block 31 → 90 KB; the log's `memory:` lines show
   where it goes (pools, each task's unused stack), and `make capture-cmd C='...'` sends a command
   through a running capture without resetting the dongle.
+- **The air mouse as a mode (v0.16.2):** the pointer and flicks read the wrist's roll from the
+  band's orientation instead of assuming palm down, so a turn left or right moves sideways however
+  the palm faces (it went diagonal holding a phone). Switching to a `pointer` profile starts the
+  gyro right away, and it stops 10 s after the last pinch (was 30), for the band's battery: a
+  pointer profile you switch into and out of is the air mouse's mode.
+- **Siri on an iPhone (v0.16.1):** `media:voice` on `middle.hold` keeps Apple's voice key down on
+  a phone while the finger is (at least 0.8 s), the way the side button starts Siri; 0.16.0 and
+  earlier pressed it for 15 ms, which iOS ignored outside CarPlay. Computers still get a tap
+  (dictation on a Mac).
 - **A mouse for the iPhone (v0.16.0):** the phone's report map has the mouse now (still no
   keyboard, so the on-screen keyboard stays), with eight buttons instead of three. With
   AssistiveTouch on (Settings › Accessibility › Touch), a `pointer` profile's pinch-and-move points

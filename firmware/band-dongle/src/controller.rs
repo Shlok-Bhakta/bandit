@@ -2,7 +2,7 @@
 //! (../np-profiles, PROFILES.md), the letter menu, handwriting typing and the air mouse,
 //! push-to-talk, and the band's power (wrist motion and handwriting only while something uses them).
 
-use band_core::controls::{draw, palm::RIGHT_PALM_DOWN_ROLL, pinch::{GyroBias, MAX_DT}};
+use band_core::controls::{draw, palm::RIGHT_PALM_DOWN_ROLL, pinch::{roll_or, up_in_band, GyroBias, MAX_DT}};
 use band_core::events::{Event, Hand};
 use band_core::gestures::{GestureRouter, Recognized, Swipe, Tap};
 use band_core::haptics::HapticsCommand;
@@ -59,10 +59,10 @@ const POINTER_MOVED: f64 = 3.0;
 const POINTER_GAIN: f64 = 4.0;
 /// A pinch hold with no word from the band this long (a lost release) no longer moves the pointer.
 const HOLD_LOST: f64 = 10.0;
-/// In a `pointer` profile the gyro keeps streaming this long after the last pinch, so the next
-/// one moves the pointer at once (turning motion on takes the band a moment). The first pinch
-/// after a pause still waits for it.
-const POINTER_WARM: f64 = 30.0;
+/// In a `pointer` profile the gyro keeps streaming this long after the last pinch (and after
+/// switching to it), so the next pinch moves the pointer at once (turning motion on takes the band
+/// a moment). Then it stops, for the band's battery: the first pinch after a pause waits for it.
+const POINTER_WARM: f64 = 10.0;
 /// Seconds between two alerts that come close together, so each pattern can be told apart.
 const ALERT_GAP: f64 = 0.5;
 /// Seconds between a ringing call's buzzes (or the pattern and a second, if that's longer).
@@ -79,6 +79,9 @@ const FLICK_RETURN: f64 = 0.45;
 const SWING_RATE: f64 = 40.0;
 /// The same raw band event this soon again is the band repeating itself.
 const BAND_EVENT_REPEAT: f64 = 0.15;
+/// Apple's voice key held on a phone at least this long (s): iOS starts Siri on a held key, like
+/// the side button, and a quick press and release is nothing there.
+const VOICE_MIN: f64 = 0.8;
 /// The app switcher lets go of ⌘ by itself after this long (a lost release).
 const SWITCHER_MAX: f64 = 15.0;
 /// A typing profile's handwriting sleeps after this long with nothing written (the band's model
@@ -155,9 +158,15 @@ pub struct Controller<'a> {
     /// The band's last word about that hold (it may repeat the hold message while it lasts).
     hold_seen: f64,
     pointer: Pointer,
+    /// "Up" in the band's frame, from its last orientation sample: the wrist's roll for the
+    /// pointer and flicks, so a turn left or right moves the pointer sideways however the palm faces.
+    up: Option<[f64; 3]>,
     last_writing_request: f64,
     /// A `hold:` chord (push-to-talk): the host holding it, since when.
     talking: Option<(u16, f64)>,
+    /// Apple's voice key held on a phone (Siri while it's down): the host, since when, and whether
+    /// the finger has let go (the key goes up once it's been down `VOICE_MIN`).
+    voice: Option<(u16, f64, bool)>,
     /// Single, double and triple taps, from the band's taps.
     taps: Taps,
     /// The host and profile the taps being counted were for (`Remote::generation`): a tap still
@@ -209,9 +218,9 @@ impl<'a> Controller<'a> {
         remote.take_switched();
         Self {
             remote, router: GestureRouter::default(), knob: VolumeKnob::new(), haptics: Default::default(), alerts_until: f64::NEG_INFINITY, next_ring: f64::NEG_INFINITY,
-            gestures: 0, battery_detail: None, motion: 0, hold: None, last_writing_request: f64::NEG_INFINITY, talking: None, taps: Taps::default(), taps_for: remote.generation(),
+            gestures: 0, battery_detail: None, motion: 0, hold: None, last_writing_request: f64::NEG_INFINITY, talking: None, voice: None, taps: Taps::default(), taps_for: remote.generation(),
             menu: None, menu_closed: f64::NEG_INFINITY, quiet_off: false,
-            hold_seen: f64::NEG_INFINITY, pointer: Pointer::default(),
+            hold_seen: f64::NEG_INFINITY, pointer: Pointer::default(), up: None,
             write_awake_until: f64::NEG_INFINITY, was_typing: false, burst: None, pointer_warm_until: f64::NEG_INFINITY, arm_dial: false,
             flicks: Flicks::default(), pinch_down: None, switcher: None, band_fired: Vec::new(), band_seen: Default::default(),
         }
@@ -436,6 +445,7 @@ impl<'a> Controller<'a> {
                 }
                 if message.finger == "middle" && released {
                     if let Some((handle, _)) = self.talking.take() { self.remote.release(handle); }
+                    if let Some(voice) = &mut self.voice { voice.2 = true; }
                 }
                 if self.menu.is_some() {
                     // Writing the letter makes the band see pinches and taps: none of them count.
@@ -502,6 +512,12 @@ impl<'a> Controller<'a> {
                                 if let Some(handle) = self.remote.hold(chord.modifiers, chord.usage) { self.talking = Some((handle, now)); }
                             }
                             Do::Hold(_) => {}
+                            Do::Media(Media::Voice) if active.kind == Kind::Phone => {
+                                info!("GESTURE: middle.hold: holding the voice key (Siri)");
+                                if self.voice.is_none() {
+                                    if let Some(handle) = self.remote.hold_media(MediaKey::Voice) { self.voice = Some((handle, now, false)); }
+                                }
+                            }
                             action => { info!("GESTURE: middle.hold: {action:?}"); self.perform(&action, Gesture::MiddleHold, &active.set, now); }
                         }
                     }
@@ -511,6 +527,7 @@ impl<'a> Controller<'a> {
                     }, now),
                 }
             }
+            Event::Orientation(q) => self.up = Some(up_in_band(q)),
             Event::Motion { timestamp_us, gyro } => {
                 self.motion += 1;
                 let flicks = active.as_ref().is_some_and(|a| a.profile().flicks(a.kind.host_kind()));
@@ -567,10 +584,20 @@ impl<'a> Controller<'a> {
                 self.talking = None;
             }
         }
+        if let Some((handle, since, let_go)) = self.voice {
+            if (let_go && now - since >= VOICE_MIN) || now - since > 60.0 {
+                self.remote.release_media(handle);
+                self.voice = None;
+            }
+        }
         if let Some(kind) = self.remote.take_switched() {
             self.feedback(now, if kind == Kind::Phone { Feedback::HostPhone } else { Feedback::HostComputer });
         }
-        if let Some(pattern) = self.remote.take_profile_switched() { self.play(now, &pattern); }
+        if let Some(pattern) = self.remote.take_profile_switched() {
+            self.play(now, &pattern);
+            // Into a pointer profile (the air mouse's mode): motion starts now, not at the first pinch.
+            if self.active().is_some_and(|a| a.points()) { self.pointer_warm_until = now + POINTER_WARM; }
+        }
         if let Some(alert) = self.remote.take_alert() { self.buzz_alert(now, alert); }
         if let Some(pattern) = self.remote.take_play() { self.play(now, &pattern); }
         if self.switcher.is_some_and(|(_, since)| now - since > SWITCHER_MAX) {
@@ -697,10 +724,15 @@ impl<'a> Controller<'a> {
 }
 
 impl Controller<'_> {
+    /// The wrist's roll about the forearm now (degrees), from the band's orientation; palm down
+    /// until the first sample, or while the forearm points nearly straight up or down.
+    fn roll(&self) -> f64 { self.up.map_or(RIGHT_PALM_DOWN_ROLL, |up| roll_or(up, RIGHT_PALM_DOWN_ROLL)) }
+
     /// One gyro sample: in a pointer profile with a pinch held, a pointer move (the drawing
     /// frame's x right, y up, as band-core's drawing reads the wrist). The gyro's resting offset is
     /// learned from every still sample: motion streams only during pinch holds (`poll`).
     fn point(&mut self, timestamp_us: u64, raw: [f64; 3], now: f64, points: bool, hand: Option<Hand>) {
+        let roll = self.roll();
         let pointer = &mut self.pointer;
         let dt = pointer.last_us.replace(timestamp_us).map(|last| timestamp_us.saturating_sub(last) as f64 / 1e6);
         let Some(dt) = dt.filter(|dt| *dt > 0.0 && *dt <= MAX_DT) else { return };
@@ -710,7 +742,7 @@ impl Controller<'_> {
             pointer.carry = [0.0; 2];
             return;
         }
-        let [x, y] = draw::project(pointer.bias.rate(raw), RIGHT_PALM_DOWN_ROLL);
+        let [x, y] = draw::project(pointer.bias.rate(raw), roll);
         // The frame is a right wrist's: on the left the band sits turned over, and up comes out
         // as down (left and right agree; the dial mirrors its turn the same way).
         let y = if hand == Some(Hand::Left) { -y } else { y };
@@ -744,7 +776,7 @@ impl Controller<'_> {
             self.flicks.swing = None;
             return None;
         }
-        let [x, y] = draw::project(self.pointer.bias.rate(raw), RIGHT_PALM_DOWN_ROLL);
+        let [x, y] = draw::project(self.pointer.bias.rate(raw), self.roll());
         let y = if hand == Some(Hand::Left) { -y } else { y };
         let rate = x.hypot(y);
         let flicks = &mut self.flicks;
@@ -778,6 +810,7 @@ impl Drop for Controller<'_> {
     /// The band went away mid push-to-talk: don't leave ⌥Space held on the computer.
     fn drop(&mut self) {
         if let Some((handle, _)) = self.talking.take() { self.remote.release(handle); }
+        if let Some((handle, ..)) = self.voice.take() { self.remote.release_media(handle); }
         self.end_switcher();
     }
 }
