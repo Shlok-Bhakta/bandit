@@ -142,6 +142,10 @@ and `tv`, which do what the modes below always did.
   channel itself, only drops the link. When the band closed its end at the same moment, NimBLE
   freed the channel twice and the dongle crashed (LoadProhibited in `ble_hs_conn_delete_chan`),
   rebooted and did it again on the next session, every few seconds.
+- **Straight air mouse and flicks (v0.16.4):** the pointer and flicks read the forearm's turn
+  (left/right) and tilt (up/down) directly. They went through handwriting's frame, 37.7° off
+  those axes: a turn left or right moved the pointer diagonally, and a clean swing never counted
+  as a flick (it has to be 1.8× more one way than the other).
 - **Siri on an iPhone (v0.16.1):** `media:voice` on `middle.hold` keeps Apple's voice key down on
   a phone while the finger is (at least 0.8 s), the way the side button starts Siri; 0.16.0 and
   earlier pressed it for 15 ms, which iOS ignored outside CarPlay. Computers still get a tap

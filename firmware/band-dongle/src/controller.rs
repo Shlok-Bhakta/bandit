@@ -2,7 +2,7 @@
 //! (../np-profiles, PROFILES.md), the letter menu, handwriting typing and the air mouse,
 //! push-to-talk, and the band's power (wrist motion and handwriting only while something uses them).
 
-use band_core::controls::{draw, palm::RIGHT_PALM_DOWN_ROLL, pinch::{roll_or, up_in_band, GyroBias, MAX_DT}};
+use band_core::controls::{palm::RIGHT_PALM_DOWN_ROLL, pinch::{roll_or, to_forearm, up_in_band, GyroBias, MAX_DT}};
 use band_core::events::{Event, Hand};
 use band_core::gestures::{GestureRouter, Recognized, Swipe, Tap};
 use band_core::haptics::HapticsCommand;
@@ -723,13 +723,22 @@ impl<'a> Controller<'a> {
     }
 }
 
+/// A gyro step (band frame, °/s) as the pointer's and flicks' x right, y up, for a pinch at
+/// `roll`: the forearm's turn about the vertical is x, its tilt about the axis across it is y
+/// (a right wrist's; the caller flips y on the left). Not `draw::project`: handwriting's frame
+/// sits 37.7° off these axes (`draw::FRAME_ROLL`), so a turn left or right went diagonal and a
+/// clean swing never passed `FLICK_DOMINANCE` (0.16.2 and before).
+fn screen(step: [f64; 3], roll: f64) -> [f64; 2] {
+    let forearm = to_forearm(step, roll);
+    [-forearm[2], forearm[0]]
+}
+
 impl Controller<'_> {
     /// The wrist's roll about the forearm now (degrees), from the band's orientation; palm down
     /// until the first sample, or while the forearm points nearly straight up or down.
     fn roll(&self) -> f64 { self.up.map_or(RIGHT_PALM_DOWN_ROLL, |up| roll_or(up, RIGHT_PALM_DOWN_ROLL)) }
 
-    /// One gyro sample: in a pointer profile with a pinch held, a pointer move (the drawing
-    /// frame's x right, y up, as band-core's drawing reads the wrist). The gyro's resting offset is
+    /// One gyro sample: in a pointer profile with a pinch held, a pointer move (`screen`). The gyro's resting offset is
     /// learned from every still sample: motion streams only during pinch holds (`poll`).
     fn point(&mut self, timestamp_us: u64, raw: [f64; 3], now: f64, points: bool, hand: Option<Hand>) {
         let roll = self.roll();
@@ -742,7 +751,7 @@ impl Controller<'_> {
             pointer.carry = [0.0; 2];
             return;
         }
-        let [x, y] = draw::project(pointer.bias.rate(raw), roll);
+        let [x, y] = screen(pointer.bias.rate(raw), roll);
         // The frame is a right wrist's: on the left the band sits turned over, and up comes out
         // as down (left and right agree; the dial mirrors its turn the same way).
         let y = if hand == Some(Hand::Left) { -y } else { y };
@@ -776,7 +785,7 @@ impl Controller<'_> {
             self.flicks.swing = None;
             return None;
         }
-        let [x, y] = draw::project(self.pointer.bias.rate(raw), self.roll());
+        let [x, y] = screen(self.pointer.bias.rate(raw), self.roll());
         let y = if hand == Some(Hand::Left) { -y } else { y };
         let rate = x.hypot(y);
         let flicks = &mut self.flicks;
