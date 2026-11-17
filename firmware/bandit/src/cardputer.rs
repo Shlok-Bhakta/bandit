@@ -243,6 +243,15 @@ impl Frame {
         }
     }
 
+    /// Signal bars, `level` of 4 lit, standing on `bottom`; `scale` 1 is 11 px wide.
+    fn bars(&mut self, x: i32, bottom: i32, level: u8, scale: i32) {
+        let lit = match level { 3.. => GREEN, 2 => AMBER, _ => RED };
+        for bar in 0..4 {
+            let height = (bar + 1) * 5 * scale / 2;
+            self.fill(x + bar * 3 * scale, bottom - height, 2 * scale, height, if bar < i32::from(level) { lit } else { LINE });
+        }
+    }
+
     /// Text with its baseline at `y`; returns how wide it was.
     fn text<F: u8g2_fonts::Font>(&mut self, text: &str, x: i32, y: i32, align: HorizontalAlignment, ink: Ink) -> i32 {
         let renderer = FontRenderer::new::<F>().with_ignore_unknown_chars(true);
@@ -287,6 +296,9 @@ struct Display<'d> {
     spi: SpiDeviceDriver<'d, SpiDriver<'d>>,
     dc: PinDriver<'d, Output>,
     backlight: PinDriver<'d, Output>,
+    /// Held high for good: a dropped pin driver lets the pin float, and a floating reset holds the
+    /// panel in reset (lit, blank).
+    _reset: PinDriver<'d, Output>,
     strip: Vec<u8>,
 }
 
@@ -299,17 +311,18 @@ impl<'d> Display<'d> {
         let driver = SpiDriver::new(spi, sclk, mosi, None::<esp_idf_svc::hal::gpio::AnyIOPin>,
                                     &DriverConfig::new().dma(Dma::Auto(WIDTH * STRIP * 2)))?;
         let spi = SpiDeviceDriver::new(driver, Some(cs), &SpiConfig::new().baudrate(40.MHz().into()))?;
-        let mut display = Display {
-            spi,
-            dc: PinDriver::output(dc)?,
-            backlight: PinDriver::output(backlight)?,
-            strip: vec![0; WIDTH * STRIP * 2],
-        };
         let mut reset = PinDriver::output(reset)?;
         reset.set_low()?;
         FreeRtos::delay_ms(10);
         reset.set_high()?;
         FreeRtos::delay_ms(120);
+        let mut display = Display {
+            spi,
+            dc: PinDriver::output(dc)?,
+            backlight: PinDriver::output(backlight)?,
+            _reset: reset,
+            strip: vec![0; WIDTH * STRIP * 2],
+        };
         display.init()?;
         Ok(display)
     }
@@ -509,6 +522,26 @@ enum Screen {
     Help,
     /// Keys go to the active computer as typing (`fn K` again ends it).
     Typing,
+    /// The band's and each device's signal strength, live (and logged): for finding how far it reaches.
+    Signal,
+}
+
+/// Signal strengths in dBm, the band's and each device's.
+#[derive(Clone, PartialEq, Default)]
+struct Signal {
+    band: Option<i8>,
+    /// The band's weakest since the signal screen opened.
+    lowest: Option<i8>,
+    hosts: Vec<(String, Option<i8>)>,
+}
+
+/// Bars out of 4.
+fn bars(rssi: i8) -> u8 {
+    match rssi { -60.. => 4, -70.. => 3, -80.. => 2, -90.. => 1, _ => 0 }
+}
+
+fn quality(rssi: i8) -> &'static str {
+    match rssi { -60.. => "Great", -70.. => "Good", -80.. => "Fair", -90.. => "Weak", _ => "Very weak" }
 }
 
 /// Everything the screen draws, so it's redrawn only when this changes.
@@ -517,6 +550,8 @@ struct View {
     screen: Screen,
     band: &'static str,
     band_battery: Option<u8>,
+    /// The band's signal, as bars in the status bar.
+    band_bars: Option<u8>,
     charging: bool,
     own_battery: Option<u8>,
     profile: Option<(String, u32, usize, usize)>,
@@ -525,6 +560,8 @@ struct View {
     pairing: u64,
     update: Option<(u32, u32)>,
     note: Option<String>,
+    /// On the signal screen.
+    signal: Option<Signal>,
     /// An animation frame (the live dot breathing, the search dots), while one runs.
     tick: u32,
 }
@@ -545,6 +582,9 @@ struct Ui<'d> {
     /// The last key or G0 press: the screen goes dark `SCREEN_ON` after it.
     touched: Instant,
     dark: bool,
+    signal: Signal,
+    /// When the signal was last logged.
+    logged: Instant,
 }
 
 const TOAST: Duration = Duration::from_millis(1600);
@@ -556,12 +596,13 @@ impl<'d> Ui<'d> {
     fn new(remote: Remote, display: Display<'d>, keyboard: Keyboard<'d>, int: Option<PinDriver<'d, Input>>,
            battery: Option<Battery<'d>>, led: Option<Led<'d>>) -> Self {
         Ui { remote, display, frame: Frame::new(), keyboard, int, battery, led, screen: Screen::Home, toast: None, millivolts: None, last: None,
-             touched: Instant::now(), dark: false }
+             touched: Instant::now(), dark: false, signal: Signal::default(), logged: Instant::now() }
     }
 
     fn run(&mut self) {
         let started = Instant::now();
         let mut next_battery = Instant::now();
+        let mut next_signal = Instant::now();
         loop {
             // INT is low while key events wait; without it, ask every round.
             if self.int.as_ref().is_none_or(|int| int.is_low()) {
@@ -574,7 +615,14 @@ impl<'d> Ui<'d> {
             }
             // G0 (main.rs acts on it): it wakes the screen too.
             if unsafe { esp_idf_svc::sys::gpio_get_level(0) } == 0 { self.wake(); }
-            if !self.dark && self.touched.elapsed() >= SCREEN_ON {
+            // Twice a second while it's watched (the signal screen, `SIGNAL on`), else for the bars.
+            if Instant::now() >= next_signal {
+                let watched = self.screen == Screen::Signal || control::SIGNAL_LOG.load(Ordering::Relaxed);
+                next_signal = Instant::now() + if watched { Duration::from_millis(500) } else { Duration::from_secs(2) };
+                self.sample_signal(watched);
+            }
+            // The signal screen stays lit: it's carried around.
+            if !self.dark && self.touched.elapsed() >= SCREEN_ON && self.screen != Screen::Signal {
                 self.dark = true;
                 self.display.light(false);
             }
@@ -591,7 +639,7 @@ impl<'d> Ui<'d> {
             if self.last.as_ref() != Some(&view) {
                 // Only the animation moved: it's all in the top band (the status bar).
                 let bands = match &self.last {
-                    Some(last) if View { tick: view.tick, ..last.clone() } == view => 0..1,
+                    Some(last) if View { tick: view.tick, band_bars: view.band_bars, ..last.clone() } == view => 0..1,
                     _ => 0..HEIGHT / BAND,
                 };
                 if let Err(error) = self.show(&view, bands) { warn!("CARDPUTER: screen: {error}"); }
@@ -613,6 +661,19 @@ impl<'d> Ui<'d> {
         self.last = Some(view);
         self.display.light(true);
         true
+    }
+
+    fn sample_signal(&mut self, log: bool) {
+        let band = control::band_rssi();
+        let hosts = self.remote.hosts().into_iter().map(|host| (host.2, control::rssi(host.0))).collect();
+        let lowest = match (self.signal.lowest, band) { (Some(low), Some(now)) => Some(low.min(now)), (low, now) => low.or(now) };
+        self.signal = Signal { band, lowest, hosts };
+        if log && self.logged.elapsed() >= Duration::from_secs(1) {
+            self.logged = Instant::now();
+            let dbm = |rssi: Option<i8>| rssi.map_or("-".to_string(), |rssi| format!("{rssi} dBm"));
+            let hosts: String = self.signal.hosts.iter().map(|(name, rssi)| format!(", {name} {}", dbm(*rssi))).collect();
+            info!("SIGNAL: band {}{hosts}", dbm(band));
+        }
     }
 
     fn read_battery(&mut self) {
@@ -647,6 +708,7 @@ impl<'d> Ui<'d> {
             screen: self.screen.clone(),
             band: state,
             band_battery: band.battery,
+            band_bars: self.signal.band.filter(|_| state == "live").map(bars),
             charging: band.charging == Some(true),
             own_battery: self.own_battery(),
             profile,
@@ -655,6 +717,7 @@ impl<'d> Ui<'d> {
             pairing: self.remote.pairing_seconds(),
             update,
             note,
+            signal: (self.screen == Screen::Signal).then(|| self.signal.clone()),
             tick: if animating { (uptime.as_millis() / 500) as u32 } else { 0 },
         }
     }
@@ -669,7 +732,7 @@ impl<'d> Ui<'d> {
         }
         match self.screen {
             Screen::Typing => self.type_key(press),
-            Screen::Help => self.screen = Screen::Home,
+            Screen::Help | Screen::Signal => self.screen = Screen::Home,
             Screen::Home => self.shortcut(press),
         }
     }
@@ -710,6 +773,10 @@ impl<'d> Ui<'d> {
                 self.toast("Keyboard on");
             }
             'h' | '?' => self.screen = Screen::Help,
+            's' => {
+                self.signal.lowest = None;
+                self.screen = Screen::Signal;
+            }
             _ => {}
         }
     }
@@ -777,6 +844,7 @@ impl<'d> Ui<'d> {
         self.status_bar(view);
         match view.screen {
             Screen::Help => return self.help(),
+            Screen::Signal => return self.signal(view),
             Screen::Typing => self.typing(view),
             Screen::Home => self.home(view),
         }
@@ -800,8 +868,9 @@ impl<'d> Ui<'d> {
         x += f.text::<fonts::u8g2_font_helvB10_tr>(&label, x, 13, HorizontalAlignment::Left, TEXT);
         if let (Some(level), "live") = (view.band_battery, view.band) {
             let text = format!(" {level}%{}", if view.charging { "+" } else { "" });
-            f.text::<fonts::u8g2_font_helvR10_tr>(&text, x, 13, HorizontalAlignment::Left, if level <= 15 { RED } else { DIM });
+            x += f.text::<fonts::u8g2_font_helvR10_tr>(&text, x, 13, HorizontalAlignment::Left, if level <= 15 { RED } else { DIM });
         }
+        if let Some(level) = view.band_bars { f.bars(x + 7, 13, level, 1); }
         // The Cardputer's own battery, at the right.
         if let Some(level) = view.own_battery {
             let (bx, by, bw, bh) = (WIDTH as i32 - 24, 4, 18, 9);
@@ -888,7 +957,7 @@ impl<'d> Ui<'d> {
             ("; .", "volume", "[ ]", "track"),
             ("P", "release band", "B", "buzz band"),
             ("A", "pair computer", "I", "pair phone"),
-            ("fn K", "keyboard mode", "H", "this help"),
+            ("S", "signal", "fn K", "keyboard"),
         ];
         for (i, (k1, a1, k2, a2)) in rows.iter().enumerate() {
             let y = 34 + i as i32 * 16;
@@ -898,6 +967,46 @@ impl<'d> Ui<'d> {
             f.text::<fonts::u8g2_font_helvR10_tr>(a2, 170, y, HorizontalAlignment::Left, TEXT);
         }
         f.text::<fonts::u8g2_font_helvR08_tr>("any key to close", WIDTH as i32 / 2, 131, HorizontalAlignment::Center, DIM);
+    }
+
+    fn signal(&mut self, view: &View) {
+        let Some(signal) = view.signal.as_ref() else { return };
+        let f = &mut self.frame;
+        let (x, y, w, h) = (6, 21, WIDTH as i32 - 12, 54);
+        f.rounded(x, y, w, h, 10, CARD);
+        f.text::<fonts::u8g2_font_helvB08_tr>("BAND SIGNAL", x + 10, y + 14, HorizontalAlignment::Left, DIM);
+        match signal.band {
+            Some(rssi) => {
+                let width = f.text::<fonts::u8g2_font_fub20_tr>(&rssi.to_string(), x + 10, y + 44, HorizontalAlignment::Left, WHITE);
+                f.text::<fonts::u8g2_font_helvR10_tr>("dBm", x + 15 + width, y + 44, HorizontalAlignment::Left, DIM);
+                let level = bars(rssi);
+                f.text::<fonts::u8g2_font_helvB10_tr>(quality(rssi), x + w - 50, y + 30, HorizontalAlignment::Right,
+                                                      match level { 3.. => GREEN, 2 => AMBER, _ => RED });
+                if let Some(lowest) = signal.lowest {
+                    f.text::<fonts::u8g2_font_helvR08_tr>(&format!("lowest {lowest}"), x + w - 50, y + 44, HorizontalAlignment::Right, DIM);
+                }
+                f.bars(x + w - 43, y + 44, level, 3);
+            }
+            None => {
+                let text = if view.band == "paused" { "Band released" } else { "Band not connected" };
+                f.text::<fonts::u8g2_font_fub14_tr>(text, x + 10, y + 42, HorizontalAlignment::Left, DIM);
+            }
+        }
+        if signal.hosts.is_empty() {
+            f.text::<fonts::u8g2_font_helvR10_tr>("No devices connected", 10, y + h + 16, HorizontalAlignment::Left, DIM);
+        }
+        for (i, (name, rssi)) in signal.hosts.iter().take(3).enumerate() {
+            let row = y + h + 16 + i as i32 * 15;
+            f.text::<fonts::u8g2_font_helvR10_tr>(&fit::<fonts::u8g2_font_helvR10_tr>(name, 130), 10, row, HorizontalAlignment::Left, TEXT);
+            match rssi {
+                Some(rssi) => {
+                    f.text::<fonts::u8g2_font_helvB10_tr>(&format!("{rssi} dBm"), 198, row, HorizontalAlignment::Right, TEXT);
+                    f.bars(207, row, bars(*rssi), 1);
+                }
+                None => { f.text::<fonts::u8g2_font_helvR10_tr>("-", 198, row, HorizontalAlignment::Right, DIM); }
+            }
+        }
+        f.text::<fonts::u8g2_font_helvR08_tr>("any key closes", WIDTH as i32 / 2, 133, HorizontalAlignment::Center, DIM);
     }
 
     fn footer(&mut self, view: &View) {

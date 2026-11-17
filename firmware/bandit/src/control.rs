@@ -1,7 +1,7 @@
 //! The private control service for the Bandit app (CONTROL.md): status, text commands,
 //! the log, and firmware updates. Every characteristic needs an encrypted (bonded) link.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -46,6 +46,35 @@ pub fn serial_update(line: &str) {
     if check == expected { updater.write_blocking(&bytes) }
 }
 pub fn paused() -> bool { PAUSED.load(Ordering::SeqCst) }
+
+/// The band's connection handle while it's connected (for its signal strength).
+static BAND_LINK: AtomicU16 = AtomicU16::new(NO_LINK);
+const NO_LINK: u16 = u16::MAX;
+/// `SIGNAL on` (serial): the signal strengths are logged every second, for walking a dongle
+/// plugged in somewhere through the house (the Cardputer's signal screen logs them too).
+pub static SIGNAL_LOG: AtomicBool = AtomicBool::new(false);
+
+/// The band is connected on `handle` until this is dropped.
+pub struct BandLink;
+
+impl BandLink {
+    pub fn new(handle: u16) -> Self {
+        BAND_LINK.store(handle, Ordering::Relaxed);
+        BandLink
+    }
+}
+
+impl Drop for BandLink {
+    fn drop(&mut self) { BAND_LINK.store(NO_LINK, Ordering::Relaxed); }
+}
+
+/// How strongly connection `handle`'s last packet arrived, in dBm.
+pub fn rssi(handle: u16) -> Option<i8> {
+    let mut rssi = 0i8;
+    (handle != NO_LINK && unsafe { esp_idf_svc::sys::ble_gap_conn_rssi(handle, &mut rssi) } == 0).then_some(rssi)
+}
+
+pub fn band_rssi() -> Option<i8> { rssi(BAND_LINK.load(Ordering::Relaxed)) }
 
 /// Power experiments (`power motion|writing on|auto`): keep the band's wrist motion or its
 /// handwriting model on regardless of gestures, to measure what they cost. Not saved.

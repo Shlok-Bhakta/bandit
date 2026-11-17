@@ -263,8 +263,11 @@ fn handle_serial(line: &str, nvs: &mut EspNvs<NvsDefault>, remote: &Remote) {
         control::serial_update(encoded.trim());
     } else if let Some(rest) = line.strip_prefix("IDENTITY").filter(|rest| rest.is_empty() || rest.starts_with(' ')) {
         identity_command(rest.trim(), nvs);
+    } else if line == "SIGNAL on" || line == "SIGNAL off" {
+        control::SIGNAL_LOG.store(line == "SIGNAL on", std::sync::atomic::Ordering::Relaxed);
+        info!("SIGNAL: {}", if line == "SIGNAL on" { "logged every second (SIGNAL off stops it)" } else { "no longer logged" });
     } else if line == "HELP" {
-        info!("Commands: OWNER <base64>, FORGET, PAUSE, RESUME, UNPAIR, IDENTITY [<mac>|clear], and the app's control commands (CONTROL.md: status, target, mode, pair, key, ...)");
+        info!("Commands: OWNER <base64>, FORGET, PAUSE, RESUME, UNPAIR, IDENTITY [<mac>|clear], SIGNAL on|off, and the app's control commands (CONTROL.md: status, target, mode, pair, key, ...)");
     } else if !line.is_empty() {
         control::run(remote, line, None);
     }
@@ -523,6 +526,7 @@ async fn run_band(client: &mut esp32_nimble::BLEClient, identity: &EnrollmentIde
     info!("Bluetooth link encrypted (bonded)");
     outcome.band = client.desc().ok().map(|desc| desc.id_address());
     let conn_handle = client.desc().map_err(step("connection handle"))?.conn_handle();
+    let _link = control::BandLink::new(conn_handle);
     let cached = nvs.get_u16(PSM_KEY).ok().flatten();
     let psm = match cached { Some(psm) => psm, None => read_psm(client).await? };
     info!("PSM {psm}{}; opening the L2CAP channel", if cached.is_some() { " (saved)" } else { "" });
