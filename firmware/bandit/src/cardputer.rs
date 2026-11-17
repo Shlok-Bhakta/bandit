@@ -52,6 +52,7 @@ fn gesture_name(name: &str) -> String {
         "index.doubleTap" => "Index double tap", "index.tripleTap" => "Index triple tap",
         "middle.doubleTap" => "Middle double tap", "middle.tripleTap" => "Middle triple tap",
         "dial.cw" => "Dial right", "dial.ccw" => "Dial left",
+        "index.tap" => "Index tap", "middle.tap" => "Middle tap", "index.hold" => "Index hold", "middle.hold" => "Middle hold",
         other => return other.trim_start_matches("band.").replace('.', " ").char_indices()
             .map(|(i, c)| if i == 0 { c.to_ascii_uppercase() } else { c }).collect(),
     };
@@ -59,7 +60,7 @@ fn gesture_name(name: &str) -> String {
 }
 
 fn action_name(action: &bandit_profiles::Action) -> String {
-    use bandit_profiles::{Action as Do, Call, Media};
+    use bandit_profiles::{Action as Do, Button, Call, HostTarget, Media, ProfileTarget};
     match action {
         Do::None => "nothing".into(),
         Do::Media(media) => match media {
@@ -70,19 +71,77 @@ fn action_name(action: &bandit_profiles::Action) -> String {
         Do::Call(Call::Answer) => "Answer call".into(),
         Do::Call(Call::End) => "End call".into(),
         Do::Call(Call::Toggle) => "Answer/End call".into(),
-        Do::Key(_) => "Shortcut".into(),
-        Do::Hold(_) => "Hold keys".into(),
-        Do::Type(_) => "Type text".into(),
-        Do::Click(_) => "Click".into(),
+        Do::Key(chord) => chord_name(chord),
+        Do::Hold(chord) => format!("hold {}", chord_name(chord)),
+        Do::Type(text) => format!("type \"{text}\""),
+        Do::Click(button) => match button {
+            Button::Left => "Click".into(), Button::Right => "Right click".into(), Button::Middle => "Middle click".into(),
+            Button::Extra(n) => format!("Mouse button {n}"),
+        },
         Do::Scroll(steps) => if *steps > 0 { "Scroll up" } else { "Scroll down" }.into(),
-        Do::Profile(_) => "Profile".into(),
-        Do::Host(_) => "Device".into(),
+        Do::Profile(target) => match target {
+            ProfileTarget::Index(index) => crate::profiles::current().profiles.get(*index)
+                .map_or("Profile".into(), |profile| format!("Go to {}", profile.name)),
+            ProfileTarget::Next => "Next profile".into(),
+            ProfileTarget::Previous => "Previous profile".into(),
+            ProfileTarget::Back => "Back a profile".into(),
+            ProfileTarget::Home => "Home profile".into(),
+            ProfileTarget::App => "The app's profile".into(),
+        },
+        Do::Host(target) => match target {
+            HostTarget::Next => "Next device".into(),
+            HostTarget::Previous => "Previous device".into(),
+            HostTarget::Kind(hosts) => format!("Go to the {}", hosts.name()),
+        },
         Do::Menu => "Letter menu".into(),
         Do::Write(_) => "Handwriting".into(),
         Do::Buzz(_) => "Buzz".into(),
-        Do::Apps(_) => "App switcher".into(),
+        Do::Apps(forward) => if *forward { "App switcher" } else { "App switcher back" }.into(),
         Do::Point => "Air mouse".into(),
     }
+}
+
+/// `cmd+shift+t`, as PROFILES.md writes it.
+fn chord_name(chord: &bandit_profiles::Chord) -> String {
+    use bandit_profiles::modifiers::{ALT, CTRL, GUI, SHIFT};
+    let mut name = String::new();
+    for (bit, word) in [(GUI, "cmd+"), (CTRL, "ctrl+"), (ALT, "alt+"), (SHIFT, "shift+")] {
+        if chord.modifiers & bit != 0 { name.push_str(word); }
+    }
+    let key = match chord.usage {
+        usage @ 0x04..=0x1D => ((b'a' + usage - 0x04) as char).to_string(),
+        usage @ 0x1E..=0x26 => ((b'1' + usage - 0x1E) as char).to_string(),
+        0x27 => "0".into(),
+        usage @ 0x3A..=0x45 => format!("f{}", usage - 0x39),
+        usage => match usage {
+            0x28 => "enter", 0x29 => "esc", 0x2A => "backspace", 0x2B => "tab", 0x2C => "space",
+            0x2D => "-", 0x2E => "=", 0x2F => "[", 0x30 => "]", 0x31 => "\\", 0x33 => ";", 0x34 => "'", 0x35 => "`",
+            0x36 => ",", 0x37 => ".", 0x38 => "/", 0x39 => "capslock",
+            0x4F => "right", 0x50 => "left", 0x51 => "down", 0x52 => "up",
+            0x4A => "home", 0x4B => "pageup", 0x4C => "delete", 0x4D => "end", 0x4E => "pagedown",
+            _ => "?",
+        }.into(),
+    };
+    name + &key
+}
+
+/// What each gesture does in this profile on `kind` (the set's `everywhere` ones included), in
+/// the order the app lists them: what's typed and the pointer first, when the profile has them.
+fn gesture_rows(profile: &bandit_profiles::Profile, kind: bandit_profiles::HostKind) -> Vec<(String, String)> {
+    use bandit_profiles::Gesture;
+    let mut rows = Vec::new();
+    if profile.pointer { rows.push(("Pinch + move".to_string(), "Mouse pointer".to_string())); }
+    if profile.typing { rows.push(("Write in the air".to_string(), "Typed".to_string())); }
+    let band = profile.gestures.keys().chain(profile.everywhere.keys()).filter(|g| matches!(g, Gesture::Band(_)));
+    let mut seen = Vec::new();
+    for gesture in Gesture::ALL.iter().chain(band) {
+        if seen.contains(gesture) { continue; }
+        seen.push(*gesture);
+        if let Some(action) = profile.binding(*gesture, kind).and_then(|binding| binding.resolve(kind)) {
+            rows.push((gesture_name(&gesture.name()), action_name(action)));
+        }
+    }
+    rows
 }
 
 // ---- start ----
@@ -525,7 +584,12 @@ enum Screen {
     Typing,
     /// The band's and each device's signal strength, live (and logged): for finding how far it reaches.
     Signal,
+    /// What the active profile's gestures do on the active device, a page at a time.
+    Gestures(usize),
 }
+
+/// Gestures on a page of that screen.
+const GESTURE_ROWS: usize = 6;
 
 /// Signal strengths in dBm, the band's and each device's.
 #[derive(Clone, PartialEq, Default)]
@@ -565,6 +629,8 @@ struct View {
     note: Option<String>,
     /// On the signal screen.
     signal: Option<Signal>,
+    /// On the gestures screen: (gesture, what it does).
+    gestures: Option<Vec<(String, String)>>,
     /// An animation frame (the live dot breathing, the search dots), while one runs.
     tick: u32,
 }
@@ -728,6 +794,8 @@ impl<'d> Ui<'d> {
             update,
             note,
             signal: (self.screen == Screen::Signal).then(|| self.signal.clone()),
+            gestures: matches!(self.screen, Screen::Gestures(_)).then(|| active.as_ref()
+                .map(|(set, index, kind)| gesture_rows(&set.profiles[*index], kind.host_kind())).unwrap_or_default()),
             tick: if animating { (uptime.as_millis() / 500) as u32 } else { 0 },
         }
     }
@@ -743,6 +811,7 @@ impl<'d> Ui<'d> {
         match self.screen {
             Screen::Typing => self.type_key(press),
             Screen::Help | Screen::Signal => self.screen = Screen::Home,
+            Screen::Gestures(page) => self.gestures_key(press, page),
             Screen::Home => self.shortcut(press),
         }
     }
@@ -783,12 +852,25 @@ impl<'d> Ui<'d> {
                 self.toast("Keyboard on");
             }
             'h' | '?' => self.screen = Screen::Help,
+            'g' => self.screen = Screen::Gestures(0),
             's' => {
                 self.signal.lowest = None;
                 self.screen = Screen::Signal;
             }
             _ => {}
         }
+    }
+
+    /// The gestures screen: `;` `,` back a page, `.` `/` `G` on (round to the first), any other key closes.
+    fn gestures_key(&mut self, press: Press, page: usize) {
+        let rows = self.remote.active_profile()
+            .map(|(set, index, kind)| gesture_rows(&set.profiles[index], kind.host_kind()).len()).unwrap_or(0);
+        let pages = rows.div_ceil(GESTURE_ROWS).max(1);
+        self.screen = match press.key.to_ascii_lowercase() {
+            ';' | ':' | ',' | '<' => Screen::Gestures((page + pages - 1) % pages),
+            '.' | '>' | '/' | '?' | 'g' => Screen::Gestures((page + 1) % pages),
+            _ => Screen::Home,
+        };
     }
 
     /// Typing mode: the key, with its modifiers, to the active computer. Not logged (it could be
@@ -855,6 +937,7 @@ impl<'d> Ui<'d> {
         match view.screen {
             Screen::Help => return self.help(view),
             Screen::Signal => return self.signal(view),
+            Screen::Gestures(page) => return self.gestures(view, page),
             Screen::Typing => self.typing(view),
             Screen::Home => self.home(view),
         }
@@ -971,10 +1054,11 @@ impl<'d> Ui<'d> {
             ("; .", "volume", "[ ]", "track"),
             ("P", "release band", "B", "buzz band"),
             ("A", "pair computer", "I", "pair phone"),
-            ("S", "signal", "fn K", "keyboard"),
+            ("G", "gestures", "S", "signal"),
+            ("fn K", "keyboard mode", "esc", "end pairing"),
         ];
         for (i, (k1, a1, k2, a2)) in rows.iter().enumerate() {
-            let y = 34 + i as i32 * 16;
+            let y = 32 + i as i32 * 14;
             f.text::<fonts::u8g2_font_helvB10_tr>(k1, 8, y, HorizontalAlignment::Left, ACCENT);
             f.text::<fonts::u8g2_font_helvR10_tr>(a1, 40, y, HorizontalAlignment::Left, TEXT);
             f.text::<fonts::u8g2_font_helvB10_tr>(k2, 132, y, HorizontalAlignment::Left, ACCENT);
@@ -985,6 +1069,29 @@ impl<'d> Ui<'d> {
             None => "any key to close".to_string(),
         };
         f.text::<fonts::u8g2_font_helvR08_tr>(&footer, WIDTH as i32 / 2, 131, HorizontalAlignment::Center, DIM);
+    }
+
+    fn gestures(&mut self, view: &View, page: usize) {
+        let Some(rows) = view.gestures.as_ref() else { return };
+        let f = &mut self.frame;
+        let name = view.profile.as_ref().map_or(String::new(), |profile| profile.0.to_uppercase());
+        f.text::<fonts::u8g2_font_helvB08_tr>(&fit::<fonts::u8g2_font_helvB08_tr>(&format!("GESTURES   {name}"), 180), 8, 32, HorizontalAlignment::Left, LIGHT);
+        let pages = rows.len().div_ceil(GESTURE_ROWS).max(1);
+        let page = page.min(pages - 1);
+        if pages > 1 {
+            f.text::<fonts::u8g2_font_helvR08_tr>(&format!("{}/{pages}", page + 1), WIDTH as i32 - 8, 32, HorizontalAlignment::Right, DIM);
+        }
+        if rows.is_empty() {
+            let text = if view.host.is_some() { "Nothing bound here" } else { "No device connected" };
+            f.text::<fonts::u8g2_font_helvR10_tr>(text, 8, 56, HorizontalAlignment::Left, DIM);
+        }
+        for (i, (gesture, action)) in rows.iter().skip(page * GESTURE_ROWS).take(GESTURE_ROWS).enumerate() {
+            let y = 48 + i as i32 * 14;
+            f.text::<fonts::u8g2_font_helvB10_tr>(&fit::<fonts::u8g2_font_helvB10_tr>(gesture, 96), 8, y, HorizontalAlignment::Left, ACCENT);
+            f.text::<fonts::u8g2_font_helvR10_tr>(&fit::<fonts::u8g2_font_helvR10_tr>(action, 126), 108, y, HorizontalAlignment::Left, TEXT);
+        }
+        let hint = if pages > 1 { "; .  more      any other key closes" } else { "any key closes" };
+        f.text::<fonts::u8g2_font_helvR08_tr>(hint, WIDTH as i32 / 2, 133, HorizontalAlignment::Center, DIM);
     }
 
     fn signal(&mut self, view: &View) {
@@ -1049,10 +1156,11 @@ impl<'d> Ui<'d> {
             (None, None) => {
                 let hint = match view.screen {
                     Screen::Typing => "fn K stops typing",
-                    _ if view.hosts > 1 => ", /  profile    tab  device    H  keys",
-                    _ => ", /  profile    space  play    H  keys",
+                    _ if view.hosts > 1 => ", /  profile   tab  device   G  gestures   H  keys",
+                    _ => ", /  profile    G  gestures    H  keys",
                 };
-                f.text::<fonts::u8g2_font_helvR08_tr>(hint, WIDTH as i32 / 2, y + 4, HorizontalAlignment::Center, DIM);
+                let hint = fit::<fonts::u8g2_font_helvR08_tr>(hint, WIDTH as i32 - 8);
+                f.text::<fonts::u8g2_font_helvR08_tr>(&hint, WIDTH as i32 / 2, y + 4, HorizontalAlignment::Center, DIM);
             }
         }
     }
