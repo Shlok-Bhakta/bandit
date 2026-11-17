@@ -663,13 +663,13 @@ struct Ui<'d> {
     /// When the signal was last logged.
     logged: Instant,
     battery_logged: Instant,
-    /// The last minute's battery readings, oldest first, and whether they've been climbing.
+    /// The last five minutes' battery readings, oldest first, and whether it's on a charger.
     trend: std::collections::VecDeque<f32>,
     rising: bool,
 }
 
-/// Battery readings in the charging trend (every 10 s: a minute).
-const TREND: usize = 7;
+/// Battery readings in the charging trend (every 10 s: five minutes).
+const TREND: usize = 31;
 
 const TOAST: Duration = Duration::from_millis(1600);
 const GESTURE_SHOWN: Duration = Duration::from_secs(6);
@@ -767,15 +767,21 @@ impl<'d> Ui<'d> {
             self.battery_logged = Instant::now();
             info!("CARDPUTER: battery {:.2} V", millivolts / 1000.0);
         }
+        // Charging, without a pin that says so: plugging a charger in lifts the battery's voltage at
+        // once (and unplugging drops it), and charging climbs it slowly (~4 mV a minute from USB).
+        let step = self.millivolts.map_or(0.0, |old| millivolts - old);
         let smoothed = match self.millivolts { Some(old) => old * 0.7 + millivolts * 0.3, None => millivolts };
         self.millivolts = Some(smoothed);
-        // Charging, without a pin that says so: the voltage climbs on a charger (and drops off it).
         self.trend.push_back(smoothed);
         if self.trend.len() > TREND { self.trend.pop_front(); }
-        if let (Some(first), Some(last), TREND) = (self.trend.front(), self.trend.back(), self.trend.len()) {
-            let rise = last - first;
-            if rise > 25.0 && !self.rising { self.rising = true; info!("CARDPUTER: charging (battery up {rise:.0} mV in a minute)"); }
-            if rise < -25.0 && self.rising { self.rising = false; info!("CARDPUTER: not charging (battery down {:.0} mV in a minute)", -rise); }
+        let rise = match (self.trend.front(), self.trend.back()) { (Some(first), Some(last)) if self.trend.len() == TREND => last - first, _ => 0.0 };
+        let charging = if step > 40.0 || rise > 12.0 { true } else if step < -40.0 || rise < -6.0 { false } else { self.rising };
+        if charging != self.rising {
+            self.rising = charging;
+            // A jump moves the trend's start too, or the old readings would undo it.
+            if step.abs() > 40.0 { self.trend.clear(); self.trend.push_back(millivolts); self.millivolts = Some(millivolts); }
+            info!("CARDPUTER: {} (battery {:.2} V, {step:+.0} mV just now, {rise:+.0} mV in 5 minutes)",
+                  if charging { "charging" } else { "not charging" }, millivolts / 1000.0);
         }
     }
 
