@@ -15,7 +15,8 @@ use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_graphics_core::geometry::{OriginDimensions, Point, Size};
 use embedded_graphics_core::pixelcolor::PixelColor;
 use embedded_graphics_core::Pixel;
-use esp_idf_svc::hal::adc::oneshot::{config::AdcChannelConfig, AdcChannelDriver, AdcDriver};
+use esp_idf_svc::hal::adc::oneshot::config::{AdcChannelConfig, Calibration};
+use esp_idf_svc::hal::adc::oneshot::{AdcChannelDriver, AdcDriver};
 use esp_idf_svc::hal::adc::attenuation::DB_12;
 use esp_idf_svc::hal::delay::FreeRtos;
 use esp_idf_svc::hal::gpio::{Input, OutputPin, Output, PinDriver, Pull};
@@ -105,7 +106,7 @@ pub fn start(remote: Remote) {
         };
         let adc = AdcDriver::new(peripherals.adc1).ok();
         let battery = adc.as_ref().and_then(|adc| {
-            let config = AdcChannelConfig { attenuation: DB_12, ..Default::default() };
+            let config = AdcChannelConfig { attenuation: DB_12, calibration: Calibration::Curve, ..Default::default() };
             let mut channel = AdcChannelDriver::new(adc, pins.gpio10, &config).ok()?;
             // Behind a halving divider.
             Some(Box::new(move || channel.read().ok().map(|mv| f32::from(mv) * 2.0)) as Battery)
@@ -550,10 +551,12 @@ struct View {
     screen: Screen,
     band: &'static str,
     band_battery: Option<u8>,
-    /// The band's signal, as bars in the status bar.
-    band_bars: Option<u8>,
+    /// The band's signal (dBm), in the status bar.
+    band_rssi: Option<i8>,
     charging: bool,
     own_battery: Option<u8>,
+    /// The Cardputer's battery in volts, for the help screen.
+    volts: Option<f32>,
     profile: Option<(String, u32, usize, usize)>,
     host: Option<(String, Kind)>,
     hosts: usize,
@@ -585,6 +588,7 @@ struct Ui<'d> {
     signal: Signal,
     /// When the signal was last logged.
     logged: Instant,
+    battery_logged: Instant,
 }
 
 const TOAST: Duration = Duration::from_millis(1600);
@@ -596,7 +600,8 @@ impl<'d> Ui<'d> {
     fn new(remote: Remote, display: Display<'d>, keyboard: Keyboard<'d>, int: Option<PinDriver<'d, Input>>,
            battery: Option<Battery<'d>>, led: Option<Led<'d>>) -> Self {
         Ui { remote, display, frame: Frame::new(), keyboard, int, battery, led, screen: Screen::Home, toast: None, millivolts: None, last: None,
-             touched: Instant::now(), dark: false, signal: Signal::default(), logged: Instant::now() }
+             touched: Instant::now(), dark: false, signal: Signal::default(), logged: Instant::now(),
+             battery_logged: Instant::now() }
     }
 
     fn run(&mut self) {
@@ -639,7 +644,7 @@ impl<'d> Ui<'d> {
             if self.last.as_ref() != Some(&view) {
                 // Only the animation moved: it's all in the top band (the status bar).
                 let bands = match &self.last {
-                    Some(last) if View { tick: view.tick, band_bars: view.band_bars, ..last.clone() } == view => 0..1,
+                    Some(last) if View { tick: view.tick, band_rssi: view.band_rssi, ..last.clone() } == view => 0..1,
                     _ => 0..HEIGHT / BAND,
                 };
                 if let Err(error) = self.show(&view, bands) { warn!("CARDPUTER: screen: {error}"); }
@@ -678,6 +683,10 @@ impl<'d> Ui<'d> {
 
     fn read_battery(&mut self) {
         let Some(millivolts) = self.battery.as_mut().and_then(|read| read()) else { return };
+        if self.millivolts.is_none() || self.battery_logged.elapsed() >= Duration::from_secs(300) {
+            self.battery_logged = Instant::now();
+            info!("CARDPUTER: battery {:.2} V", millivolts / 1000.0);
+        }
         self.millivolts = Some(match self.millivolts { Some(old) => old * 0.7 + millivolts * 0.3, None => millivolts });
     }
 
@@ -708,9 +717,10 @@ impl<'d> Ui<'d> {
             screen: self.screen.clone(),
             band: state,
             band_battery: band.battery,
-            band_bars: self.signal.band.filter(|_| state == "live").map(bars),
+            band_rssi: self.signal.band.filter(|_| state == "live"),
             charging: band.charging == Some(true),
             own_battery: self.own_battery(),
+            volts: self.millivolts.map(|mv| (mv / 10.0).round() / 100.0),
             profile,
             host,
             hosts: hosts.len(),
@@ -843,7 +853,7 @@ impl<'d> Ui<'d> {
         self.frame.clear(BG);
         self.status_bar(view);
         match view.screen {
-            Screen::Help => return self.help(),
+            Screen::Help => return self.help(view),
             Screen::Signal => return self.signal(view),
             Screen::Typing => self.typing(view),
             Screen::Home => self.home(view),
@@ -870,7 +880,10 @@ impl<'d> Ui<'d> {
             let text = format!(" {level}%{}", if view.charging { "+" } else { "" });
             x += f.text::<fonts::u8g2_font_helvR10_tr>(&text, x, 13, HorizontalAlignment::Left, if level <= 15 { RED } else { DIM });
         }
-        if let Some(level) = view.band_bars { f.bars(x + 7, 13, level, 1); }
+        if let Some(rssi) = view.band_rssi {
+            f.bars(x + 7, 13, bars(rssi), 1);
+            f.text::<fonts::u8g2_font_helvR08_tr>(&rssi.to_string(), x + 22, 13, HorizontalAlignment::Left, DIM);
+        }
         // The Cardputer's own battery, at the right.
         if let Some(level) = view.own_battery {
             let (bx, by, bw, bh) = (WIDTH as i32 - 24, 4, 18, 9);
@@ -948,9 +961,10 @@ impl<'d> Ui<'d> {
         f.fill(x + w - 20, y + 30, 3, 18, ACCENT);
     }
 
-    fn help(&mut self) {
+    fn help(&mut self, view: &View) {
         let f = &mut self.frame;
-        f.text::<fonts::u8g2_font_helvB10_tr>("Keys", WIDTH as i32 - 8, 13, HorizontalAlignment::Right, ACCENT);
+        // Left of the battery.
+        f.text::<fonts::u8g2_font_helvB10_tr>("Keys", WIDTH as i32 - 62, 13, HorizontalAlignment::Right, ACCENT);
         let rows = [
             (", /", "profile", "tab", "device"),
             ("1-9", "go to profile", "space", "play/pause"),
@@ -966,7 +980,11 @@ impl<'d> Ui<'d> {
             f.text::<fonts::u8g2_font_helvB10_tr>(k2, 132, y, HorizontalAlignment::Left, ACCENT);
             f.text::<fonts::u8g2_font_helvR10_tr>(a2, 170, y, HorizontalAlignment::Left, TEXT);
         }
-        f.text::<fonts::u8g2_font_helvR08_tr>("any key to close", WIDTH as i32 / 2, 131, HorizontalAlignment::Center, DIM);
+        let footer = match view.volts {
+            Some(volts) => format!("any key to close      battery {volts:.2} V"),
+            None => "any key to close".to_string(),
+        };
+        f.text::<fonts::u8g2_font_helvR08_tr>(&footer, WIDTH as i32 / 2, 131, HorizontalAlignment::Center, DIM);
     }
 
     fn signal(&mut self, view: &View) {
@@ -1014,7 +1032,7 @@ impl<'d> Ui<'d> {
         let y = 118;
         // A pairing window (one is open for 2 minutes after power-up) says so here, under a note.
         let pairing = (view.pairing > 0 && view.screen == Screen::Home)
-            .then(|| format!("Pairing {} s: pick Bandit", view.pairing));
+            .then(|| format!("Pairing open {} s    esc closes", view.pairing));
         match (&view.note, pairing) {
             (None, Some(pairing)) => {
                 f.rounded(6, y - 12, WIDTH as i32 - 12, 24, 8, CARD);
