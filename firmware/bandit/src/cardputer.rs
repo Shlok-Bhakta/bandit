@@ -312,6 +312,13 @@ impl Frame {
         }
     }
 
+    /// A lightning bolt 5 wide and 8 tall from (x, top): charging.
+    fn bolt(&mut self, x: i32, top: i32, ink: Ink) {
+        for (row, (start, len)) in [(3, 2), (2, 2), (1, 2), (0, 5), (2, 2), (1, 2), (1, 1), (0, 1)].into_iter().enumerate() {
+            self.fill(x + start, top + row as i32, len, 1, ink);
+        }
+    }
+
     /// Text with its baseline at `y`; returns how wide it was.
     fn text<F: u8g2_fonts::Font>(&mut self, text: &str, x: i32, y: i32, align: HorizontalAlignment, ink: Ink) -> i32 {
         let renderer = FontRenderer::new::<F>().with_ignore_unknown_chars(true);
@@ -619,6 +626,7 @@ struct View {
     band_rssi: Option<i8>,
     charging: bool,
     own_battery: Option<u8>,
+    own_charging: bool,
     /// The Cardputer's battery in volts, for the help screen.
     volts: Option<f32>,
     profile: Option<(String, u32, usize, usize)>,
@@ -655,7 +663,13 @@ struct Ui<'d> {
     /// When the signal was last logged.
     logged: Instant,
     battery_logged: Instant,
+    /// The last minute's battery readings, oldest first, and whether they've been climbing.
+    trend: std::collections::VecDeque<f32>,
+    rising: bool,
 }
+
+/// Battery readings in the charging trend (every 10 s: a minute).
+const TREND: usize = 7;
 
 const TOAST: Duration = Duration::from_millis(1600);
 const GESTURE_SHOWN: Duration = Duration::from_secs(6);
@@ -667,7 +681,7 @@ impl<'d> Ui<'d> {
            battery: Option<Battery<'d>>, led: Option<Led<'d>>) -> Self {
         Ui { remote, display, frame: Frame::new(), keyboard, int, battery, led, screen: Screen::Home, toast: None, millivolts: None, last: None,
              touched: Instant::now(), dark: false, signal: Signal::default(), logged: Instant::now(),
-             battery_logged: Instant::now() }
+             battery_logged: Instant::now(), trend: Default::default(), rising: false }
     }
 
     fn run(&mut self) {
@@ -697,14 +711,14 @@ impl<'d> Ui<'d> {
                 self.dark = true;
                 self.display.light(false);
             }
+            if Instant::now() >= next_battery {
+                next_battery = Instant::now() + Duration::from_secs(10);
+                self.read_battery();
+            }
             if self.dark {
                 self.light();
                 FreeRtos::delay_ms(20);
                 continue;
-            }
-            if Instant::now() >= next_battery {
-                next_battery = Instant::now() + Duration::from_secs(10);
-                self.read_battery();
             }
             let view = self.view(started.elapsed());
             if self.last.as_ref() != Some(&view) {
@@ -753,7 +767,21 @@ impl<'d> Ui<'d> {
             self.battery_logged = Instant::now();
             info!("CARDPUTER: battery {:.2} V", millivolts / 1000.0);
         }
-        self.millivolts = Some(match self.millivolts { Some(old) => old * 0.7 + millivolts * 0.3, None => millivolts });
+        let smoothed = match self.millivolts { Some(old) => old * 0.7 + millivolts * 0.3, None => millivolts };
+        self.millivolts = Some(smoothed);
+        // Charging, without a pin that says so: the voltage climbs on a charger (and drops off it).
+        self.trend.push_back(smoothed);
+        if self.trend.len() > TREND { self.trend.pop_front(); }
+        if let (Some(first), Some(last), TREND) = (self.trend.front(), self.trend.back(), self.trend.len()) {
+            let rise = last - first;
+            if rise > 25.0 && !self.rising { self.rising = true; info!("CARDPUTER: charging (battery up {rise:.0} mV in a minute)"); }
+            if rise < -25.0 && self.rising { self.rising = false; info!("CARDPUTER: not charging (battery down {:.0} mV in a minute)", -rise); }
+        }
+    }
+
+    /// On a charger: a computer on the USB port, or the battery climbing.
+    fn own_charging(&self) -> bool {
+        self.rising || unsafe { esp_idf_svc::sys::usb_serial_jtag_is_connected() }
     }
 
     fn own_battery(&self) -> Option<u8> {
@@ -786,6 +814,7 @@ impl<'d> Ui<'d> {
             band_rssi: self.signal.band.filter(|_| state == "live"),
             charging: band.charging == Some(true),
             own_battery: self.own_battery(),
+            own_charging: self.own_charging(),
             volts: self.millivolts.map(|mv| (mv / 10.0).round() / 100.0),
             profile,
             host,
@@ -960,8 +989,11 @@ impl<'d> Ui<'d> {
         let mut x = 19;
         x += f.text::<fonts::u8g2_font_helvB10_tr>(&label, x, 13, HorizontalAlignment::Left, TEXT);
         if let (Some(level), "live") = (view.band_battery, view.band) {
-            let text = format!(" {level}%{}", if view.charging { "+" } else { "" });
-            x += f.text::<fonts::u8g2_font_helvR10_tr>(&text, x, 13, HorizontalAlignment::Left, if level <= 15 { RED } else { DIM });
+            x += f.text::<fonts::u8g2_font_helvR10_tr>(&format!(" {level}%"), x, 13, HorizontalAlignment::Left, if level <= 15 && !view.charging { RED } else { DIM });
+            if view.charging {
+                f.bolt(x + 3, 5, AMBER);
+                x += 8;
+            }
         }
         if let Some(rssi) = view.band_rssi {
             f.bars(x + 7, 13, bars(rssi), 1);
@@ -973,8 +1005,14 @@ impl<'d> Ui<'d> {
             f.rounded(bx, by, bw, bh, 2, LINE);
             f.fill(bx + bw, by + 3, 2, 3, LINE);
             let inner = ((bw - 4) * i32::from(level) / 100).max(1);
-            f.fill(bx + 2, by + 2, inner, bh - 4, if level <= 15 { RED } else { TEXT });
-            f.text::<fonts::u8g2_font_helvR08_tr>(&format!("{level}%"), bx - 4, 12, HorizontalAlignment::Right, DIM);
+            let low = level <= 15 && !view.own_charging;
+            f.fill(bx + 2, by + 2, inner, bh - 4, if low { RED } else { TEXT });
+            let mut right = bx - 4;
+            if view.own_charging {
+                f.bolt(right - 5, 4, AMBER);
+                right -= 8;
+            }
+            f.text::<fonts::u8g2_font_helvR08_tr>(&format!("{level}%"), right, 12, HorizontalAlignment::Right, DIM);
         }
     }
 

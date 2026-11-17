@@ -1,6 +1,6 @@
 [package]
 name = "bandit"
-version = "0.21.0"
+version = "0.21.1"
 edition = "2021"
 description = "Meta Neural Band dongle: connects to the band with its owner key (band-core) and exposes it as system input"
 license = "MIT"
