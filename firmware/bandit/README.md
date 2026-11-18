@@ -122,9 +122,11 @@ The band is worn all day, so the dongle keeps it as quiet as it can:
   menu waits for a letter, and **sleeps after 90 s** with nothing written (one buzz). Any write-mode
   gesture wakes it (two buzzes). Turning it off also puts back the two standby settings turning it
   on disables, so the band can save power again.
-- **The link** lets the band skip up to 4 connection events (30–50 ms each) while it has nothing to
-  send; it still sends a gesture at the next one. Battery reads every 2 minutes, a quiet-link check
-  every 5 s.
+- **The link** lets the band skip up to 4 connection events (15 ms each: the band keeps 15 ms) while
+  it has nothing to send; it still sends a gesture at the next one. The band takes that back now and
+  then (around handwriting turning on or off), which cost it 1–2.5 mA idle until the next
+  reconnect: the dongle checks every 30 s and asks again. Battery reads every 2 minutes, a
+  quiet-link check every 5 s.
 - Nothing else is asked for: no raw EMG, no orientation without motion.
 
 **Measuring it:** `make power PHASES='wait:180 auto:15 motion:15 writing:15'` (dongle on USB, band

@@ -424,8 +424,14 @@ async fn read_psm(client: &mut esp32_nimble::BLEClient) -> anyhow::Result<u16> {
 /// Units: 1.25 ms (interval), 10 ms (supervision timeout), 0.625 ms (scan while connecting).
 const SETUP_LINK: (u16, u16, u16, u16) = (6, 12, 0, 400);
 /// The band may skip up to 4 connection events while it has nothing to send (it still sends at the
-/// next one when it does), so it needn't wake every 30-50 ms.
+/// next one when it does), so it needn't wake for every one. It keeps 15 ms whatever is asked
+/// (every link in kiwi's logs, 0.15–0.21), so it wakes every 75 ms instead of every 15.
 const LOW_POWER_LINK: (u16, u16, u16, u16) = (24, 40, 4, 400);
+/// The band takes the skipped events back now and then (its own update, mostly just after
+/// handwriting turns on or off): 15 ms with none skipped, until the link was made again. Idle, it
+/// drew 10–11.5 mA so, 8.5–9 mA skipping 4 (kiwi's logs, 0.15–0.21: 18% of the time live was at
+/// none skipped, hours at a stretch). Checked this often (s), and `LOW_POWER_LINK` asked for again.
+const LINK_CHECK: f64 = 30.0;
 
 fn update_link(conn_handle: u16, (itvl_min, itvl_max, latency, supervision_timeout): (u16, u16, u16, u16)) {
     let params = esp_idf_svc::sys::ble_gap_upd_params {
@@ -442,6 +448,12 @@ pub fn link_params(conn_handle: u16) -> String {
     let mut desc = esp_idf_svc::sys::ble_gap_conn_desc::default();
     if unsafe { esp_idf_svc::sys::ble_gap_conn_find(conn_handle, &mut desc) } != 0 { return "?".into(); }
     format!("{:.1} ms latency {} timeout {} ms", desc.conn_itvl as f32 * 1.25, desc.conn_latency, desc.supervision_timeout as u32 * 10)
+}
+
+/// How many connection events the band link lets it skip now (None once it's gone).
+fn link_latency(conn_handle: u16) -> Option<u16> {
+    let mut desc = esp_idf_svc::sys::ble_gap_conn_desc::default();
+    (unsafe { esp_idf_svc::sys::ble_gap_conn_find(conn_handle, &mut desc) } == 0).then_some(desc.conn_latency)
 }
 
 /// Until NimBLE reports the disconnect (at most 1.5 s), so the next connect doesn't find it open.
@@ -574,6 +586,7 @@ async fn stream_session(channel: &coc::Channel, identity: &EnrollmentIdentity, r
     let mut next_battery = 0.0;
     let mut last_traffic = now();
     let mut last_status_query = 0.0;
+    let mut last_link_check = 0.0;
     let mut last_report = -100.0;
     let mut reports = 0u32;
     // The most events one SDU made, and its size, since the last report.
@@ -619,6 +632,15 @@ async fn stream_session(channel: &coc::Channel, identity: &EnrollmentIdentity, r
             timeline.mark("handshake");
             info!("CONNECTED: {}", timeline.report());
             update_link(conn_handle, LOW_POWER_LINK);
+            last_link_check = now();
+        }
+        // The first check comes a whole `LINK_CHECK` after that update, which takes a moment.
+        if outcome.live && now() - last_link_check >= LINK_CHECK {
+            last_link_check = now();
+            if link_latency(conn_handle).is_some_and(|latency| latency < LOW_POWER_LINK.2) {
+                info!("band link {}: asking again for up to {} skipped events", link_params(conn_handle), LOW_POWER_LINK.2);
+                update_link(conn_handle, LOW_POWER_LINK);
+            }
         }
         let hand = session.hand();
         for event in session.tick(now()) { controller.event(event, now(), hand); }
