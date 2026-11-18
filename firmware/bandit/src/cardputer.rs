@@ -7,7 +7,7 @@
 //! dongle runs headless as before. Everything runs on one thread at the main task's priority, and
 //! the screen is redrawn only when what it shows changes (a few times a second while it animates).
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -36,6 +36,12 @@ use crate::control;
 use crate::remote::{keys, Action, Alert, Kind, MediaKey, Remote};
 
 // ---- what the band just did, for the screen (the controller says) ----
+
+/// The letter menu is waiting for a letter (the controller says): the screen lists them.
+static MENU_OPEN: AtomicBool = AtomicBool::new(false);
+
+/// The letter menu opened or closed (the controller calls this).
+pub fn menu(open: bool) { MENU_OPEN.store(open, Ordering::Relaxed); }
 
 /// The last gesture and what it did, and when.
 static GESTURE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
@@ -639,6 +645,8 @@ struct View {
     signal: Option<Signal>,
     /// On the gestures screen: (gesture, what it does).
     gestures: Option<Vec<(String, String)>>,
+    /// While the letter menu waits: (letter, what it does).
+    menu: Option<Vec<(char, String)>>,
     /// An animation frame (the live dot breathing, the search dots), while one runs.
     tick: u32,
 }
@@ -674,6 +682,8 @@ const TREND: usize = 31;
 const TOAST: Duration = Duration::from_millis(1600);
 const GESTURE_SHOWN: Duration = Duration::from_secs(6);
 /// How long the screen stays lit after the last key (or G0) press.
+/// Letters in each of the letter menu's two columns.
+const MENU_ROWS: usize = 5;
 const SCREEN_ON: Duration = Duration::from_secs(10);
 
 impl<'d> Ui<'d> {
@@ -700,6 +710,8 @@ impl<'d> Ui<'d> {
             }
             // G0 (main.rs acts on it): it wakes the screen too.
             if unsafe { esp_idf_svc::sys::gpio_get_level(0) } == 0 { self.wake(); }
+            // The letter menu: a glance at the letters, so it lights the screen while it waits.
+            if MENU_OPEN.load(Ordering::Relaxed) { self.wake(); }
             // Twice a second while it's watched (the signal screen, `SIGNAL on`), else for the bars.
             if Instant::now() >= next_signal {
                 let watched = self.screen == Screen::Signal || control::SIGNAL_LOG.load(Ordering::Relaxed);
@@ -831,6 +843,8 @@ impl<'d> Ui<'d> {
             signal: (self.screen == Screen::Signal).then(|| self.signal.clone()),
             gestures: matches!(self.screen, Screen::Gestures(_)).then(|| active.as_ref()
                 .map(|(set, index, kind)| gesture_rows(&set.profiles[*index], kind.host_kind())).unwrap_or_default()),
+            menu: MENU_OPEN.load(Ordering::Relaxed).then(|| crate::profiles::current().menu.iter()
+                .map(|(letter, action)| (letter.to_ascii_uppercase(), action_name(action))).collect()),
             tick: if animating { (uptime.as_millis() / 500) as u32 } else { 0 },
         }
     }
@@ -969,6 +983,7 @@ impl<'d> Ui<'d> {
         self.frame.set_accent(accent);
         self.frame.clear(BG);
         self.status_bar(view);
+        if view.menu.is_some() { return self.menu(view); }
         match view.screen {
             Screen::Help => return self.help(view),
             Screen::Signal => return self.signal(view),
@@ -1113,6 +1128,23 @@ impl<'d> Ui<'d> {
             None => "any key to close".to_string(),
         };
         f.text::<fonts::u8g2_font_helvR08_tr>(&footer, WIDTH as i32 / 2, 131, HorizontalAlignment::Center, DIM);
+    }
+
+    /// The letter menu, over whatever screen is up: two columns of letters and what they run.
+    fn menu(&mut self, view: &View) {
+        let Some(rows) = view.menu.as_ref() else { return };
+        let f = &mut self.frame;
+        f.text::<fonts::u8g2_font_helvB08_tr>("LETTER MENU", 8, 32, HorizontalAlignment::Left, LIGHT);
+        if rows.is_empty() {
+            f.text::<fonts::u8g2_font_helvR10_tr>("No letters in this profile set", 8, 56, HorizontalAlignment::Left, DIM);
+        }
+        let per_column = rows.len().div_ceil(2).clamp(1, MENU_ROWS);
+        for (i, (letter, action)) in rows.iter().take(2 * MENU_ROWS).enumerate() {
+            let (x, y) = (8 + (i / per_column) as i32 * 116, 50 + (i % per_column) as i32 * 16);
+            f.text::<fonts::u8g2_font_helvB10_tr>(&letter.to_string(), x, y, HorizontalAlignment::Left, ACCENT);
+            f.text::<fonts::u8g2_font_helvR10_tr>(&fit::<fonts::u8g2_font_helvR10_tr>(action, 94), x + 16, y, HorizontalAlignment::Left, TEXT);
+        }
+        f.text::<fonts::u8g2_font_helvR08_tr>("write a letter in the air", WIDTH as i32 / 2, 133, HorizontalAlignment::Center, DIM);
     }
 
     fn gestures(&mut self, view: &View, page: usize) {

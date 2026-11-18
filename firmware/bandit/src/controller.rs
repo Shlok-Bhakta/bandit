@@ -288,6 +288,7 @@ impl<'a> Controller<'a> {
 
     fn close_menu(&mut self, now: f64) {
         if self.menu.take().is_some() {
+            crate::cardputer::menu(false);
             self.menu_closed = now;
             self.quiet_off = true;
         }
@@ -366,6 +367,7 @@ impl<'a> Controller<'a> {
             Do::Menu => {
                 info!("MENU: open: write one letter");
                 self.menu = Some(Menu { opened: now, writing_since: None });
+                crate::cardputer::menu(true);
             }
             Do::Buzz(pattern) => self.play(now, pattern),
             // Only `middle.hold` points (`event`); elsewhere the check refused it.
@@ -894,6 +896,7 @@ impl Controller<'_> {
 impl Drop for Controller<'_> {
     /// The band went away mid push-to-talk: don't leave ⌥Space held on the computer.
     fn drop(&mut self) {
+        crate::cardputer::menu(false);
         if let Some((handle, _)) = self.talking.take() { self.remote.release(handle); }
         if let Some((handle, ..)) = self.voice.take() { self.remote.release_media(handle); }
         self.end_switcher();
