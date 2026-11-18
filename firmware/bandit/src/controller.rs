@@ -80,6 +80,10 @@ const RING_EVERY: f64 = 3.0;
 const FLICK_RATE: f64 = 150.0;
 /// ... with the main direction at least this many times the other.
 const FLICK_DOMINANCE: f64 = 1.8;
+/// In a profile with flicks, a pinch's first dial steps wait this long (s) before they're sent: a
+/// flick starts as a fast turn, whose first degrees made a volume step before the flick was seen
+/// (switching devices nudged the volume, which also unmutes a Mac). A flick meanwhile drops them.
+const DIAL_SETTLE: f64 = 0.25;
 /// Below this the wrist is still again and the next flick may come (°/s).
 const FLICK_REARM: f64 = 60.0;
 /// A turn back the other way this soon after a flick is the hand returning, not a flick.
@@ -107,6 +111,11 @@ struct Pointer {
     /// Degrees moved during this pinch hold.
     moved: f64,
 }
+
+/// What the pinch held now has been used for: the dial or flicks, never both (a flick's start and
+/// the hand coming back both turn the dial).
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum PinchUse { #[default] Open, Dial, Flicked }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Direction { Up, Down, Left, Right }
@@ -192,6 +201,9 @@ pub struct Controller<'a> {
     flicks: Flicks,
     /// The index finger is down (the band's `press`), since when: flicks count from then.
     pinch_down: Option<f64>,
+    pinch_use: PinchUse,
+    /// Dial steps waiting out `DIAL_SETTLE` (+ clockwise), since when.
+    dial_pending: Option<(i32, f64)>,
     /// The app switcher holding ⌘ (or Alt) on a host, since when (`apps:` on a flick).
     switcher: Option<(u16, f64)>,
     /// Raw band events lately fired, for the band's repeats (`BAND_EVENT_REPEAT`).
@@ -235,7 +247,7 @@ impl<'a> Controller<'a> {
             menu: None, menu_closed: f64::NEG_INFINITY, quiet_off: false,
             hold_seen: f64::NEG_INFINITY, pointer: Pointer::default(), up: None,
             write_awake_until: f64::NEG_INFINITY, was_typing: false, burst: None, pointer_warm_until: f64::NEG_INFINITY, pointing: None, click_until: f64::NEG_INFINITY, arm_dial: false,
-            flicks: Flicks::default(), pinch_down: None, switcher: None, band_fired: Vec::new(), band_seen: Default::default(),
+            flicks: Flicks::default(), pinch_down: None, pinch_use: PinchUse::Open, dial_pending: None, switcher: None, band_fired: Vec::new(), band_seen: Default::default(),
         }
     }
 
@@ -479,11 +491,14 @@ impl<'a> Controller<'a> {
                 if let Some(active) = &active { self.band_events(&message, active, now); }
                 if message.finger == "index" && !message.synthetic {
                     if message.action == "press" || message.derived_action == "buttonPress" {
-                        if self.pinch_down.is_none() { self.flicks = Flicks::default(); }
+                        if self.pinch_down.is_none() { self.flicks = Flicks::default(); self.pinch_use = PinchUse::Open; }
                         self.pinch_down.get_or_insert(now);
                     } else if released {
                         self.pinch_down = None;
                         self.end_switcher();
+                        // A turn let go of before it settled is still a turn.
+                        if let Some((steps, _)) = self.dial_pending.take() { self.dial(steps, now); }
+                        self.pinch_use = PinchUse::Open;
                     }
                 }
                 if message.finger == "index" && !message.synthetic {
@@ -577,15 +592,19 @@ impl<'a> Controller<'a> {
             }
             // A pointer profile: a pinch's turn moves the pointer (`point`), not the dial.
             Event::DialTurn(_) if self.menu.is_some() || active.as_ref().is_some_and(Active::points) => {}
+            // A pinch that flicked: its turns are the flick's.
+            Event::DialTurn(_) if self.pinch_use == PinchUse::Flicked => {}
             Event::DialTurn(delta) => {
                 // kinesis: on the left wrist the gyro-derived rotation is reversed.
                 let delta = if hand == Some(Hand::Left) { -delta } else { delta };
                 let step = self.knob.turn(delta, now);
-                if step != 0 { if let Some(hold) = self.hold.as_mut() { hold.1 = true; } }
-                match step {
-                    1 => self.gesture(Gesture::DialCw, now),
-                    -1 => self.gesture(Gesture::DialCcw, now),
-                    _ => {}
+                if step == 0 { return; }
+                if let Some(hold) = self.hold.as_mut() { hold.1 = true; }
+                let flicks = active.as_ref().is_some_and(|a| a.profile().flicks(a.kind.host_kind()));
+                if flicks && self.pinch_use == PinchUse::Open {
+                    self.dial_pending.get_or_insert((0, now)).0 += step;
+                } else {
+                    self.dial(step, now);
                 }
             }
             Event::BatteryStatus(Some(status)) => {
@@ -613,6 +632,12 @@ impl<'a> Controller<'a> {
     /// Handwriting on or off as the mode asks, what it wrote typed, queued haptics. Returns bytes
     /// for the band.
     pub fn poll(&mut self, session: &mut BandSession, now: f64) -> Vec<u8> {
+        if let Some((steps, since)) = self.dial_pending {
+            if now - since >= DIAL_SETTLE {
+                self.dial_pending = None;
+                self.dial(steps, now);
+            }
+        }
         // A lost release would leave ⌥Space held: let go after a minute whatever happens.
         if let Some((handle, since)) = self.talking {
             if now - since > 60.0 {
@@ -842,15 +867,27 @@ impl Controller<'_> {
             return None;
         }
         let (major, minor) = if x.abs() >= y.abs() { (x.abs(), y.abs()) } else { (y.abs(), x.abs()) };
-        if !enabled || !flicks.armed || rate < FLICK_RATE || major < FLICK_DOMINANCE * minor { return None; }
+        if !enabled || self.pinch_use == PinchUse::Dial || !flicks.armed || rate < FLICK_RATE || major < FLICK_DOMINANCE * minor { return None; }
         let direction = Direction::of(x, y);
         flicks.armed = false;
         if flicks.last.is_some_and(|(last, at)| last.opposite() == direction && now - at < FLICK_RETURN) { return None; }
         flicks.last = Some((direction, now));
         if let Some(swing) = flicks.swing.as_mut() { swing.3 = true; }
+        self.pinch_use = PinchUse::Flicked;
+        if let Some((steps, _)) = self.dial_pending.take() { info!("dial: {} step(s) dropped: the pinch flicked", steps.abs()); }
         // A pinch that flicked isn't index.hold when it lets go.
         if let Some(hold) = self.hold.as_mut() { hold.1 = true; }
         Some(direction)
+    }
+}
+
+impl Controller<'_> {
+    /// Dial steps (+ clockwise) as dial.cw or dial.ccw: the pinch is the dial's from now on.
+    fn dial(&mut self, steps: i32, now: f64) {
+        if steps == 0 { return; }
+        self.pinch_use = PinchUse::Dial;
+        let gesture = if steps > 0 { Gesture::DialCw } else { Gesture::DialCcw };
+        for _ in 0..steps.unsigned_abs() { self.gesture(gesture, now); }
     }
 }
 
